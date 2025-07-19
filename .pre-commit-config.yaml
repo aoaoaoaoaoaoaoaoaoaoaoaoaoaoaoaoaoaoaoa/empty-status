@@ -1,0 +1,18 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt            # cargo fmt -- --check
+      - id: cargo-check    # cargo check --tests
+
+  - repo: https://github.com/EmbarkStudios/cargo-deny
+    rev: v0.14.16
+    hooks:
+      - id: cargo-deny
+        args: ["--all-features", "check"]
