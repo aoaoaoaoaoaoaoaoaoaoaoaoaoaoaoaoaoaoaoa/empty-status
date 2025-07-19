@@ -2,7 +2,8 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::any::type_name;
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,6 +30,7 @@ pub const BLUE: &str = "#81A2BE";
 pub const VIOLET: &str = "#B294BB";
 pub const BROWN: &str = "#A3685A";
 
+// Define a trait for unit data structs
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OutputChunk {
     pub full_text: String,
@@ -74,14 +76,13 @@ pub struct ClickEvent {
 
 #[async_trait]
 pub trait Unit: Send + Sync {
-    fn name(&self) -> String;
+    fn name(&self) -> String {
+        type_name::<Self>().to_string()
+    }
     fn poll_interval(&self) -> f64;
 
-    // Main method to read unit's data
-    async fn read(&mut self) -> Result<HashMap<String, Value>>;
-
-    // Format the data into a display string
-    fn format(&self, data: &HashMap<String, Value>) -> String;
+    // Main method to read and format unit's data
+    async fn read_formatted(&mut self) -> Result<String>;
 
     // Process the unit's output with the padding
     fn process_chunk(&self, text: String, padding: i32) -> OutputChunk {
@@ -101,7 +102,7 @@ pub struct Status {
     units: Vec<Box<dyn Unit>>,
     padding: i32,
     min_sleep: f64,
-    unit_outputs: Arc<Mutex<HashMap<String, OutputChunk>>>,
+    unit_outputs: Arc<Mutex<std::collections::HashMap<String, OutputChunk>>>,
     click_tx: Sender<ClickEvent>,
 }
 
@@ -145,7 +146,7 @@ impl Status {
         }
 
         // Initialize unit outputs
-        let mut unit_outputs = HashMap::new();
+        let mut unit_outputs = std::collections::HashMap::new();
         for unit in &units {
             let name = unit.name();
             let chunk =
@@ -206,9 +207,9 @@ impl Status {
                         _ = ticker.tick() => true
                     };
                     if do_refresh {
-                        let result = match unit.read().await {
-                            Ok(data) => unit.format(&data),
+                        let result = match unit.read_formatted().await {
                             Err(e) => color(format!("{unit_name} failed: {e}"), BROWN),
+                            Ok(formatted) => formatted,
                         };
 
                         let mut guard = outputs.lock().unwrap();

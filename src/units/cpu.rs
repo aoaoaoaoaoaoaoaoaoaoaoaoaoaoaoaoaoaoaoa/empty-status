@@ -1,14 +1,24 @@
 use crate::core::{color, get_color, make_temp_color_str, Unit, ORANGE, RED};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CpuData {
+    p_user: f64,
+    p_kernel: f64,
+    p_user_avg: f64,
+    p_kernel_avg: f64,
+    temp_c: Option<f64>,
+    err_no_temp: bool,
+    err_no_sensors: bool,
+}
+
 pub struct CPU {
-    name: String,
     poll_interval: f64,
     show_breakdown: bool,
     is_intel: bool,
@@ -32,7 +42,6 @@ impl CPU {
         let (total, user, kernel) = Self::read_cpu_times().unwrap_or((0, 0, 0));
 
         Self {
-            name: "RS9CPU".to_string(),
             poll_interval,
             show_breakdown: false,
             is_intel,
@@ -151,17 +160,11 @@ impl CPU {
 
 #[async_trait]
 impl Unit for CPU {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
     fn poll_interval(&self) -> f64 {
         self.poll_interval
     }
 
-    async fn read(&mut self) -> Result<HashMap<String, Value>> {
-        let mut result = HashMap::new();
-
+    async fn read_formatted(&mut self) -> Result<String> {
         // Read CPU times
         let (total, user, kernel) = Self::read_cpu_times()?;
 
@@ -181,9 +184,6 @@ impl Unit for CPU {
         } else {
             0.0
         };
-
-        result.insert("p_u".to_string(), json!(p_user));
-        result.insert("p_k".to_string(), json!(p_kernel));
 
         // Update usage queue
         if self.usage_queue.len() >= self.queue_max_size {
@@ -209,10 +209,26 @@ impl Unit for CPU {
         }
 
         let queue_size = self.usage_queue.len() as f64;
-        if queue_size > 0.0 {
-            result.insert("p_u_avg".to_string(), json!(total_user / queue_size));
-            result.insert("p_k_avg".to_string(), json!(total_kernel / queue_size));
-        }
+        let p_user_avg = if queue_size > 0.0 {
+            total_user / queue_size
+        } else {
+            0.0
+        };
+        let p_kernel_avg = if queue_size > 0.0 {
+            total_kernel / queue_size
+        } else {
+            0.0
+        };
+
+        let mut data = CpuData {
+            p_user,
+            p_kernel,
+            p_user_avg,
+            p_kernel_avg,
+            temp_c: None,
+            err_no_temp: false,
+            err_no_sensors: false,
+        };
 
         // Read temperature
         if !self.no_temps {
@@ -227,38 +243,28 @@ impl Unit for CPU {
                     // Calculate average temp
                     let avg_temp: f64 =
                         self.temp_queue.iter().sum::<f64>() / self.temp_queue.len() as f64;
-                    result.insert("temp_C".to_string(), json!(avg_temp));
+                    data.temp_c = Some(avg_temp);
                 }
                 Err(_) => {
-                    result.insert("err_no_temp".to_string(), json!(true));
+                    data.err_no_temp = true;
                 }
             }
         } else {
-            result.insert("err_no_sensors".to_string(), json!(true));
+            data.err_no_sensors = true;
         }
 
-        Ok(result)
-    }
-
-    fn format(&self, data: &HashMap<String, Value>) -> String {
         // Get CPU usage values
-        let p_user = data.get("p_u").and_then(|v| v.as_f64()).unwrap_or(0.0) * 100.0;
-
-        let p_kernel = data.get("p_k").and_then(|v| v.as_f64()).unwrap_or(0.0) * 100.0;
-
+        let p_user = data.p_user * 100.0;
+        let p_kernel = data.p_kernel * 100.0;
         let total_usage = p_user + p_kernel;
 
         // Format temperature
-        let temp_str = if data.contains_key("err_no_sensors") {
+        let temp_str = if data.err_no_sensors {
             color("no sensors", RED)
-        } else if data.contains_key("err_no_temp") {
+        } else if data.err_no_temp {
             color("unk", ORANGE)
-        } else if let Some(Value::Number(temp_val)) = data.get("temp_C") {
-            if let Some(temp) = temp_val.as_f64() {
-                format!("{} C", make_temp_color_str(temp))
-            } else {
-                color("err", RED)
-            }
+        } else if let Some(temp) = data.temp_c {
+            format!("{} C", make_temp_color_str(temp))
         } else {
             color("err", RED)
         };
@@ -301,7 +307,7 @@ impl Unit for CPU {
             )
         };
 
-        format!("cpu [{}] [temp {}]", load_str, temp_str)
+        Ok(format!("cpu [{}] [temp {}]", load_str, temp_str))
     }
 
     fn handle_click(&mut self, _click: crate::core::ClickEvent) {

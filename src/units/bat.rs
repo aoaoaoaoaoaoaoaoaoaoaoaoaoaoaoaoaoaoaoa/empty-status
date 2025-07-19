@@ -1,43 +1,77 @@
-use crate::core::{color, get_color, Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
+use crate::core::{color, get_color, ClickEvent, Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-pub struct Py9Bat {
-    name: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BatDisplayMode {
+    CurCapacity,
+    DesignCapacity,
+    VoltageCurrent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+enum BatStatus {
+    Charging,
+    Discharging,
+    Full,
+    Balanced,
+    Unknown,
+    Other,
+}
+
+impl BatStatus {
+    pub fn from_uevent(u: &HashMap<String, String>) -> Self {
+        match u.get("status") {
+            Some(s) => match s.to_ascii_lowercase().as_str() {
+                "charging" => Self::Charging,
+                "discharging" => Self::Discharging,
+                "full" => Self::Full,
+                "unknown" => Self::Unknown,
+                _ => Self::Other,
+            },
+            None => Self::Other,
+        }
+    }
+    pub fn state_string(&self) -> String {
+        match self {
+            Self::Discharging => color("dis", ORANGE),
+            Self::Charging => color("chr", GREEN),
+            Self::Full => color("ful", BLUE),
+            Self::Balanced => color("bal", CYAN),
+            _ => color("unk", VIOLET),
+        }
+    }
+}
+
+pub struct Bat {
     poll_interval: f64,
-    bat_id: usize,
     min_rem_smooth: Option<f64>,
-    called: usize,
-    clicked: bool,
-    cur_status: Option<u8>,
+    mode: BatDisplayMode,
+    cur_status: BatStatus,
     p_hist: VecDeque<f64>,
     p_hist_maxlen: usize,
     uevent_path: String,
 }
 
-impl Py9Bat {
+impl Bat {
     pub fn new(poll_interval: f64, bat_id: usize) -> Self {
-        let uevent_path = format!("/sys/class/power_supply/BAT{}/uevent", bat_id);
+        let uevent_path = format!("/sys/class/power_supply/BAT{bat_id}/uevent");
         let p_hist_maxlen = (10.0 / poll_interval).ceil() as usize;
         Self {
-            name: "py9bat".to_string(),
             poll_interval,
-            bat_id,
             min_rem_smooth: None,
-            called: 0,
-            clicked: false,
-            cur_status: None,
+            mode: BatDisplayMode::CurCapacity,
+            cur_status: BatStatus::Unknown,
             p_hist: VecDeque::with_capacity(p_hist_maxlen),
             p_hist_maxlen,
             uevent_path,
         }
     }
 
-    fn parse_uevent(&self) -> Result<HashMap<String, Value>> {
+    fn parse_uevent(&self) -> Result<HashMap<String, String>> {
         let file = File::open(&self.uevent_path)?;
         let reader = BufReader::new(file);
         let mut out = HashMap::new();
@@ -49,207 +83,139 @@ impl Py9Bat {
                     .unwrap_or(k)
                     .to_ascii_lowercase();
                 let val = v.trim().to_ascii_lowercase();
-                // Try to parse as int, else as float, else as string
-                if let Ok(i) = val.parse::<i64>() {
-                    out.insert(key, json!(i));
-                } else if let Ok(f) = val.parse::<f64>() {
-                    out.insert(key, json!(f));
-                } else {
-                    out.insert(key, json!(val));
-                }
+                out.insert(key, val);
             }
         }
         Ok(out)
     }
 }
 
-#[async_trait]
-impl Unit for Py9Bat {
-    fn name(&self) -> String {
-        self.name.clone()
+const UH_TO_SI: f64 = 0.0036;
+
+pub struct BatteryInfo {
+    pub charged_frac: f64,
+    pub charged_frac_design: f64,
+    pub power: f64,
+    pub energy: f64,
+    pub energy_max: f64,
+    pub voltage: Option<f64>,
+    pub current: Option<f64>,
+}
+
+impl BatteryInfo {
+    pub fn from_charge(u: &HashMap<String, String>) -> Option<Self> {
+        let charge_now = u.get("charge_now")?.parse::<i64>().ok()?;
+        let charge_full = u.get("charge_full")?.parse::<i64>().ok()?;
+        let charge_full_design = u.get("charge_full_design")?.parse::<i64>().ok()?;
+        let voltage_now = u.get("voltage_now")?.parse::<i64>().ok()?;
+        let voltage_min_design = u.get("voltage_min_design")?.parse::<i64>().ok()?;
+        let current_now = u.get("current_now")?.parse::<i64>().ok()?;
+
+        let q = UH_TO_SI * charge_now as f64;
+        let qmx = UH_TO_SI * charge_full as f64;
+        let qmxd = UH_TO_SI * charge_full_design as f64;
+
+        let voltage = voltage_now as f64 / 1e6;
+        let vmn = voltage_min_design as f64 / 1e6;
+        let current = current_now as f64 / 1e6;
+
+        let power = current * voltage;
+
+        let vmx = voltage * (qmx / q);
+        let energy_max = qmx * (vmn + vmx) / 2.0;
+
+        let vmxd = voltage * (qmxd / q);
+        let energy_max_design = qmxd * (vmn + vmxd) / 2.0;
+
+        let energy = q * (vmn + q * (vmxd - vmn) / (2.0 * qmxd));
+
+        let charged_frac = energy / energy_max;
+        let charged_frac_design = energy / energy_max_design;
+
+        Some(Self {
+            charged_frac,
+            charged_frac_design,
+            power,
+            energy,
+            energy_max,
+            voltage: Some(voltage),
+            current: Some(current),
+        })
     }
 
+    /// Construct from `energy_now`, `energy_full`, etc.
+    pub fn from_energy(u: &HashMap<String, String>) -> Option<Self> {
+        let energy_now = u.get("energy_now")?.parse::<i64>().ok()?;
+        let energy_full = u.get("energy_full")?.parse::<i64>().ok()?;
+        let energy_full_design = u.get("energy_full_design")?.parse::<i64>().ok()?;
+        let power_now = u.get("power_now")?.parse::<i64>().ok()?;
+
+        let energy = UH_TO_SI * energy_now as f64;
+        let energy_max = UH_TO_SI * energy_full as f64;
+        let energy_max_design = UH_TO_SI * energy_full_design as f64;
+        let power = power_now as f64 / 1e6;
+
+        let charged_frac = energy / energy_max;
+        let charged_frac_design = energy / energy_max_design;
+
+        Some(Self {
+            charged_frac,
+            charged_frac_design,
+            power,
+            energy,
+            energy_max,
+            voltage: None,
+            current: None,
+        })
+    }
+}
+
+#[async_trait]
+impl Unit for Bat {
     fn poll_interval(&self) -> f64 {
         self.poll_interval
     }
 
-    async fn read(&mut self) -> Result<HashMap<String, Value>> {
-        let mut result = HashMap::new();
-        let uh_to_si = 0.0036; // micro-X-hour to SI
-
-        self.called += 1;
+    async fn read_formatted(&mut self) -> Result<String> {
+        let mut missing = false;
         let uevent = match self.parse_uevent() {
-            Ok(u) => u,
+            Ok(map) => map,
             Err(_) => {
-                result.insert("err_no_bat".to_string(), json!(true));
-                return Ok(result);
+                missing = true;
+                HashMap::new()
             }
         };
 
-        if !uevent
-            .get("present")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(1)
-            .eq(&1)
-        {
-            result.insert("err_no_bat".to_string(), json!(true));
-            return Ok(result);
+        if missing || uevent.get("present").map(|v| v == "0").unwrap_or(false) {
+            return Ok(color("No battery", RED));
         }
 
-        let mut charged_f = 0.0;
-        let mut charged_f_design = 0.0;
-        let status_str = uevent
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let mut p = 0.0;
-        let mut e = 0.0;
-        let mut emx = 0.0;
-        let mut emxd = 0.0;
+        let bi =
+            match BatteryInfo::from_charge(&uevent).or_else(|| BatteryInfo::from_energy(&uevent)) {
+                Some(bi) => bi,
+                None => {
+                    return Ok(color("invalid data", RED));
+                }
+            };
 
-        // Try charge_* first, else energy_*
-        if let (
-            Some(charge_now),
-            Some(charge_full),
-            Some(charge_full_design),
-            Some(voltage_now),
-            Some(voltage_min_design),
-            Some(current_now),
-        ) = (
-            uevent.get("charge_now").and_then(|v| v.as_i64()),
-            uevent.get("charge_full").and_then(|v| v.as_i64()),
-            uevent.get("charge_full_design").and_then(|v| v.as_i64()),
-            uevent.get("voltage_now").and_then(|v| v.as_i64()),
-            uevent.get("voltage_min_design").and_then(|v| v.as_i64()),
-            uevent.get("current_now").and_then(|v| v.as_i64()),
-        ) {
-            let q = uh_to_si * charge_now as f64;
-            let qmx = uh_to_si * charge_full as f64;
-            let qmxd = uh_to_si * charge_full_design as f64;
-            let v = voltage_now as f64 / 1e6;
-            let vmn = voltage_min_design as f64 / 1e6;
-            let i = current_now as f64 / 1e6;
-            p = i * v;
-
-            let vmx = v * (qmx / q);
-            emx = qmx * (vmn + vmx) / 2.0;
-            let vmxd = v * (qmxd / q);
-            emxd = qmxd * (vmn + vmxd) / 2.0;
-            e = q * (vmn + q * (vmxd - vmn) / (2.0 * qmxd));
-            charged_f = e / emx;
-            charged_f_design = e / emxd;
-        } else if let (
-            Some(energy_now),
-            Some(energy_full),
-            Some(energy_full_design),
-            Some(power_now),
-        ) = (
-            uevent.get("energy_now").and_then(|v| v.as_i64()),
-            uevent.get("energy_full").and_then(|v| v.as_i64()),
-            uevent.get("energy_full_design").and_then(|v| v.as_i64()),
-            uevent.get("power_now").and_then(|v| v.as_i64()),
-        ) {
-            e = uh_to_si * energy_now as f64;
-            emx = uh_to_si * energy_full as f64;
-            emxd = uh_to_si * energy_full_design as f64;
-            p = power_now as f64 / 1e6;
-            charged_f = e / emx;
-            charged_f_design = e / emxd;
-        } else {
-            result.insert("err_bad_format".to_string(), json!(true));
-            return Ok(result);
-        }
-
-        // Maintain power history for smoothing
+        // Power smoothing
         if self.p_hist.len() == self.p_hist_maxlen {
             self.p_hist.pop_front();
         }
-        self.p_hist.push_back(p);
+        self.p_hist.push_back(bi.power);
         let av_p = if !self.p_hist.is_empty() {
             self.p_hist.iter().sum::<f64>() / self.p_hist.len() as f64
         } else {
-            p
+            bi.power
         };
 
-        result.insert("charged_f".to_string(), json!(charged_f));
-        result.insert("charged_f_design".to_string(), json!(charged_f_design));
-
-        // Status mapping
-        let status = match status_str.as_str() {
-            "charging" => 1,
-            "discharging" => 0,
-            "full" => 3,
-            "unknown" => 4,
-            _ => {
-                if av_p == 0.0 {
-                    2 // balancing
-                } else {
-                    4 // unknown
-                }
-            }
+        let pct = if self.mode == BatDisplayMode::DesignCapacity {
+            100.0 * bi.charged_frac_design
+        } else {
+            100.0 * bi.charged_frac
         };
-        result.insert("status".to_string(), json!(status));
-
-        // Reset smoothing if status changes
-        if Some(status) != self.cur_status {
-            self.min_rem_smooth = None;
-            self.cur_status = Some(status);
-            self.p_hist.clear();
-        }
-
-        // Estimate seconds remaining
-        let sec_rem = match status {
-            1 => {
-                if av_p > 0.0 {
-                    (emx - e) / av_p
-                } else {
-                    -1.0
-                }
-            }
-            0 => {
-                if av_p > 0.0 {
-                    e / av_p
-                } else {
-                    -1.0
-                }
-            }
-            _ => -1.0,
-        };
-        result.insert("sec_rem".to_string(), json!(sec_rem));
-
-        Ok(result)
-    }
-
-    fn format(&self, info: &HashMap<String, Value>) -> String {
-        let e_prefix = format!("bat{} [{}]", self.bat_id, "{}");
-
-        if info
-            .get("err_no_bat")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            return e_prefix.replace("{}", &color("no bat", RED));
-        }
-        if info
-            .get("err_bad_format")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            return e_prefix.replace("{}", &color("loading", ORANGE));
-        }
-
-        let charged_f = info
-            .get(if self.clicked {
-                "charged_f_design"
-            } else {
-                "charged_f"
-            })
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let pct = 100.0 * charged_f;
         let pct_str = color(
-            format!("{:3.0}", pct),
+            format!("{pct:3.0}"),
             &get_color(
                 pct,
                 &[20.0, 40.0, 60.0, 80.0],
@@ -258,42 +224,82 @@ impl Unit for Py9Bat {
             ),
         );
 
-        let st = info.get("status").and_then(|v| v.as_u64()).unwrap_or(4);
-        let st_string = match st {
-            1 => color("chr", GREEN),
-            0 => color("dis", ORANGE),
-            3 => color("ful", BLUE),
-            2 => color("bal", CYAN),
-            _ => color("unk", VIOLET),
-        };
+        // Determine battery state
+        let mut bs = BatStatus::from_uevent(&uevent);
+        if bs == BatStatus::Other && av_p == 0.0 {
+            bs = BatStatus::Balanced;
+        }
 
-        let raw_sec_rem = info.get("sec_rem").and_then(|v| v.as_f64());
-        let rem_string = if let Some(sec) = raw_sec_rem {
-            if sec < 0.0 {
-                "--:--".to_string()
-            } else {
-                let isr = sec.round() as i64;
-                let min_rem = (isr / 60) % 60;
-                let hr_rem = isr / 3600;
-                format!("{:02}:{:02}", hr_rem, min_rem)
+        // Reset smoothing if status changes
+        if bs != self.cur_status {
+            self.min_rem_smooth = None;
+            self.cur_status = bs;
+            self.p_hist.clear();
+        }
+
+        // Estimate time remaining in seconds
+        let sec_rem: Option<f64> = match bs {
+            BatStatus::Charging => {
+                if av_p > 0.0 {
+                    Some((bi.energy_max - bi.energy) / av_p)
+                } else {
+                    None
+                }
             }
-        } else {
-            color("loading", VIOLET)
+            BatStatus::Discharging => {
+                if av_p > 0.0 {
+                    Some(bi.energy / av_p)
+                } else {
+                    None
+                }
+            }
+            _ => None,
         };
 
-        let x = if !self.clicked {
-            ["[", "]"]
-        } else {
-            ["<", ">"]
+        let rem_string = match sec_rem {
+            Some(sec) => {
+                let mins = (sec / 60.0).round() as i64;
+                let hours = mins / 60;
+                let min_rem = mins % 60;
+                format!("{hours:02}:{min_rem:02}")
+            }
+            None => String::from("--:--"),
         };
 
-        format!(
-            "bat {}{}%{} [{} rem, {}]",
-            x[0], pct_str, x[1], rem_string, st_string
-        )
+        if self.mode != BatDisplayMode::VoltageCurrent {
+            let brackets = match self.mode {
+                BatDisplayMode::CurCapacity => ["{", "}"],
+                BatDisplayMode::DesignCapacity => ["<", ">"],
+                _ => unreachable!(), // TODO fugly learn how to handle shared destructure with
+                                     // fallthrough
+            };
+
+            Ok(format!(
+                "bat {}{}%{} [{} rem, {}]",
+                brackets[0],
+                pct_str,
+                brackets[1],
+                rem_string,
+                bs.state_string()
+            ))
+        } else {
+            let voltage = bi.voltage.map_or("--".to_string(), |v| format!("{v:.2} V"));
+            let current = bi.current.map_or("--".to_string(), |c| format!("{c:.2} A"));
+            Ok(format!("({voltage} | {current})"))
+        }
     }
 
-    fn handle_click(&mut self, _click: crate::core::ClickEvent) {
-        self.clicked = !self.clicked;
+    fn handle_click(&mut self, _click: ClickEvent) {
+        match self.mode {
+            BatDisplayMode::CurCapacity => {
+                self.mode = BatDisplayMode::DesignCapacity;
+            }
+            BatDisplayMode::DesignCapacity => {
+                self.mode = BatDisplayMode::VoltageCurrent;
+            }
+            BatDisplayMode::VoltageCurrent => {
+                self.mode = BatDisplayMode::CurCapacity;
+            }
+        }
     }
 }

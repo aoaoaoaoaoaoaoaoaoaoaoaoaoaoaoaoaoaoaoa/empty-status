@@ -8,6 +8,7 @@ use tracing_subscriber::fmt;
 
 use crate::core::Status;
 
+// TODO nuke
 fn init_file_logger() -> tracing_appender::non_blocking::WorkerGuard {
     // produce a timestamped filename under /tmp
     let filename = format!("i3status-{}.log", Local::now().format("%Y%m%d-%H%M%S"));
@@ -30,12 +31,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Define units to display in the status bar
     let units: Vec<Box<dyn core::Unit>> = vec![
-        Box::new(units::bat::RS9Bat::new(5.0)),
-        Box::new(units::disk::RS9Disk::new(30.0)),
-        Box::new(units::wifi::RS9Wifi::new(5.0)),
+        // Box::new(units::bat::RS9Bat::new(5.0)),
+        Box::new(units::disk::Disk::new("nvme0n1p2")),
+        // Box::new(units::wifi::RS9Wifi::new(5.0)),
         Box::new(units::mem::Mem::new(3.0)),
         Box::new(units::cpu::CPU::new(0.33)),
-        Box::new(units::time::Time::new("%a %b %d %Y - %H:%M".to_string(), 0.7)),
+        Box::new(units::time::Time::new(
+            "%a %b %d %Y - %H:%M".to_string(),
+            0.7,
+        )),
     ];
 
     let rs9status = Status::new(units, 0.1, 1)?;

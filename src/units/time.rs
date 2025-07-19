@@ -2,13 +2,20 @@ use crate::core::{self, colorize_float, format_duration, Unit};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Local;
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeData {
+    datestr: String,
+    uptime: f64,
+    loadavg_1: f64,
+    loadavg_5: f64,
+    loadavg_10: f64,
+}
+
 pub struct Time {
-    name: String,
     poll_interval: f64,
     format: String,
     doing_uptime: bool,
@@ -28,7 +35,6 @@ impl Time {
         ];
 
         Self {
-            name: "RS9Time".to_string(),
             poll_interval,
             format,
             doing_uptime: false,
@@ -70,56 +76,49 @@ impl Time {
 
 #[async_trait]
 impl Unit for Time {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
     fn poll_interval(&self) -> f64 {
         self.poll_interval
     }
 
-    async fn read(&mut self) -> Result<HashMap<String, Value>> {
-        let mut result = HashMap::new();
-
+    async fn read_formatted(&mut self) -> Result<String> {
         // Get current time
         let current_time = Local::now().format(&self.format).to_string();
-        result.insert("datestr".to_string(), json!(current_time));
 
         // Get uptime
         let uptime = self.read_uptime()?;
-        result.insert("uptime".to_string(), json!(uptime));
 
         // Get load averages
         let (l1, l5, l10) = self.read_loadavg()?;
-        result.insert("loadavg_1".to_string(), json!(l1));
-        result.insert("loadavg_5".to_string(), json!(l5));
-        result.insert("loadavg_10".to_string(), json!(l10));
 
-        Ok(result)
-    }
+        let data = TimeData {
+            datestr: current_time,
+            uptime,
+            loadavg_1: l1,
+            loadavg_5: l5,
+            loadavg_10: l10,
+        };
 
-    fn format(&self, data: &HashMap<String, Value>) -> String {
         if !self.doing_uptime {
             // Show date/time
-            if let Some(Value::String(datestr)) = data.get("datestr") {
-                return datestr.clone();
-            }
-            "Unknown time".to_string()
+            Ok(data.datestr)
         } else {
             // Show uptime and load average
-            let uptime = data.get("uptime").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let ut_s = format_duration(uptime);
+            let ut_s = format_duration(data.uptime);
 
             let mut load_strings = Vec::new();
-            for key in ["1", "5", "10"] {
-                let load_key = format!("loadavg_{key}");
-                let load = data.get(&load_key).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                load_strings.push(colorize_float(load, 3, 2, &self.load_color_scale));
-            }
-            format!(
+            load_strings.push(colorize_float(data.loadavg_1, 3, 2, &self.load_color_scale));
+            load_strings.push(colorize_float(data.loadavg_5, 3, 2, &self.load_color_scale));
+            load_strings.push(colorize_float(
+                data.loadavg_10,
+                3,
+                2,
+                &self.load_color_scale,
+            ));
+
+            Ok(format!(
                 "uptime [{}] load [{}/{}/{}]",
                 ut_s, load_strings[0], load_strings[1], load_strings[2]
-            )
+            ))
         }
     }
 
