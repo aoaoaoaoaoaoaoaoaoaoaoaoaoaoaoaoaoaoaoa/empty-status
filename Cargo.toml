@@ -16,6 +16,6 @@ num_cpus = "1.16"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
-
-[dependencies]
+sysinfo = "0.36.1"
 toml = "0.9.2"
+derive_builder = "0.20.2"

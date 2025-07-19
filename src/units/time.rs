@@ -1,76 +1,40 @@
-use crate::core::{self, colorize_float, format_duration, Unit};
+use crate::{
+    core::{self, format_duration, Unit},
+    display::{color, RangeColorizer, RangeColorizerBuilder},
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Local;
-use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use sysinfo::{LoadAvg, System};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TimeData {
     datestr: String,
-    uptime: f64,
-    loadavg_1: f64,
-    loadavg_5: f64,
-    loadavg_10: f64,
+    uptime: u64,
+    load_avg: LoadAvg,
 }
 
 pub struct Time {
     poll_interval: f64,
     format: String,
     doing_uptime: bool,
-    uptime_file: String,
-    loadavg_file: String,
-    load_color_scale: Vec<f64>,
+    colorizer: RangeColorizer,
 }
 
 impl Time {
     pub fn new(format: String, poll_interval: f64) -> Self {
-        let cpu_count = num_cpus::get() as f64;
-        let load_color_scale = vec![
-            cpu_count * 0.1,
-            cpu_count * 0.25,
-            cpu_count * 0.50,
-            cpu_count * 0.75,
-        ];
+        let ncpu = num_cpus::get() as f64;
+        let load_color_scale = RangeColorizerBuilder::default()
+            .breakpoints(vec![ncpu * 0.1, ncpu * 0.25, ncpu * 0.50, ncpu * 0.75])
+            .build()
+            .unwrap();
 
         Self {
             poll_interval,
             format,
             doing_uptime: false,
-            uptime_file: "/proc/uptime".to_string(),
-            loadavg_file: "/proc/loadavg".to_string(),
-            load_color_scale,
+            colorizer: load_color_scale,
         }
-    }
-
-    fn read_uptime(&self) -> Result<f64> {
-        let file = File::open(&self.uptime_file)?;
-        let mut reader = BufReader::new(file);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-
-        let uptime = line
-            .split_whitespace()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Invalid uptime format"))?;
-        let uptime: f64 = uptime.parse()?;
-
-        Ok(uptime)
-    }
-
-    fn read_loadavg(&self) -> Result<(f64, f64, f64)> {
-        let file = File::open(&self.loadavg_file)?;
-        let mut reader = BufReader::new(file);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 {
-            return Err(anyhow::anyhow!("Invalid loadavg format"));
-        }
-
-        Ok((parts[0].parse()?, parts[1].parse()?, parts[2].parse()?))
     }
 }
 
@@ -81,21 +45,14 @@ impl Unit for Time {
     }
 
     async fn read_formatted(&mut self) -> Result<String> {
-        // Get current time
         let current_time = Local::now().format(&self.format).to_string();
-
-        // Get uptime
-        let uptime = self.read_uptime()?;
-
-        // Get load averages
-        let (l1, l5, l10) = self.read_loadavg()?;
+        let uptime = System::uptime();
+        let load_avg = System::load_average();
 
         let data = TimeData {
             datestr: current_time,
             uptime,
-            loadavg_1: l1,
-            loadavg_5: l5,
-            loadavg_10: l10,
+            load_avg,
         };
 
         if !self.doing_uptime {
@@ -103,21 +60,20 @@ impl Unit for Time {
             Ok(data.datestr)
         } else {
             // Show uptime and load average
-            let ut_s = format_duration(data.uptime);
+            let ut_s = format_duration(data.uptime as f64);
 
             let mut load_strings = Vec::new();
-            load_strings.push(colorize_float(data.loadavg_1, 3, 2, &self.load_color_scale));
-            load_strings.push(colorize_float(data.loadavg_5, 3, 2, &self.load_color_scale));
-            load_strings.push(colorize_float(
-                data.loadavg_10,
-                3,
-                2,
-                &self.load_color_scale,
-            ));
+            for data in [
+                &data.load_avg.one,
+                &data.load_avg.five,
+                &data.load_avg.fifteen,
+            ] {
+                load_strings.push(color(format!("{data:>3.2}"), self.colorizer.get(*data)));
+            }
 
             Ok(format!(
-                "uptime [{}] load [{}/{}/{}]",
-                ut_s, load_strings[0], load_strings[1], load_strings[2]
+                "uptime [{ut_s}] load [{}/{}/{}]",
+                load_strings[0], load_strings[1], load_strings[2]
             ))
         }
     }

@@ -1,7 +1,8 @@
 mod core;
+mod display;
 mod units;
 
-use chrono::Local;
+use tracing::info;
 use tracing_appender::non_blocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt;
@@ -11,7 +12,7 @@ use crate::core::Status;
 // TODO nuke
 fn init_file_logger() -> tracing_appender::non_blocking::WorkerGuard {
     // produce a timestamped filename under /tmp
-    let filename = format!("i3status-{}.log", Local::now().format("%Y%m%d-%H%M%S"));
+    let filename = format!("i3status.log");
     // Rotation::NEVER means "never roll over"; it just creates a single file.
     let file_appender: RollingFileAppender =
         RollingFileAppender::new(Rotation::NEVER, "/tmp", filename);
@@ -29,13 +30,16 @@ fn init_file_logger() -> tracing_appender::non_blocking::WorkerGuard {
 async fn main() -> anyhow::Result<()> {
     let _guard = init_file_logger();
 
+    info!("\n\nStarting Emtpy Status Bar!");
+
     // Define units to display in the status bar
     let units: Vec<Box<dyn core::Unit>> = vec![
         // Box::new(units::bat::RS9Bat::new(5.0)),
+        Box::new(units::net::Net::new("e0")),
         Box::new(units::disk::Disk::new("nvme0n1p2")),
         // Box::new(units::wifi::RS9Wifi::new(5.0)),
-        Box::new(units::mem::Mem::new(3.0)),
-        Box::new(units::cpu::CPU::new(0.33)),
+        Box::new(units::mem::Mem::new()),
+        Box::new(units::cpu::Cpu::new()),
         Box::new(units::time::Time::new(
             "%a %b %d %Y - %H:%M".to_string(),
             0.7,

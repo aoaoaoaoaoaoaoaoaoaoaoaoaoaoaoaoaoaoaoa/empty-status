@@ -1,70 +1,117 @@
-use crate::core::{color, get_color, Unit};
+use std::path::Path;
+
+use crate::{
+    core::{Unit, GREEN},
+    display::{color, RangeColorizer, RangeColorizerBuilder},
+};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use sysinfo::{ProcessesToUpdate, System};
+use tracing::debug;
+
+const MEM_POLL_IVAL: f64 = 0.5;
+
+enum MemReadMode {
+    Totals,
+    WorstProcess,
+}
 
 pub struct Mem {
-    poll_interval: f64,
+    mode: MemReadMode,
+    col_load_tot: RangeColorizer,
+    col_load_worst: RangeColorizer,
+}
+impl Mem {
+    pub fn new() -> Self {
+        Self {
+            mode: MemReadMode::Totals,
+            col_load_tot: RangeColorizerBuilder::default().build().unwrap(),
+            col_load_worst: RangeColorizerBuilder::default()
+                .breakpoints(vec![5.0, 10.0, 20.0, 50.0])
+                .build()
+                .unwrap(),
+        }
+    }
 }
 
 impl Mem {
-    pub fn new(poll_interval: f64) -> Self {
-        Self { poll_interval }
+    fn read_formatted_totals(&self) -> Result<String> {
+        let mut sys = System::new();
+        sys.refresh_memory();
+
+        let total_bytes = sys.total_memory();
+        let used_bytes = sys.used_memory();
+
+        let used_frac = used_bytes as f64 / total_bytes as f64;
+
+        let used_gib = used_bytes as f64 / (1 << 30) as f64; // Convert bytes to GiB
+        let used_percent = used_frac * 100.0;
+
+        let col = self.col_load_tot.get(used_percent);
+        let formatted_gib = color(format!("{used_gib:>2.1}"), col);
+        let formatted_percent = color(format!("{used_percent:>2.0}"), col);
+
+        Ok(format!(
+            "mem [used {formatted_gib} GiB ({formatted_percent}%)]",
+        ))
+    }
+
+    fn read_formatted_worst_rss(&self) -> Result<String> {
+        debug!("entering worst rss!");
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        sys.refresh_memory();
+        // aggregate by simple stem, removing flags etc.
+        let mut max_name = "";
+        let mut max_rss_bytes = 0;
+
+        for process in sys.processes().values() {
+            if let Some(name) = process
+                .exe()
+                .and_then(Path::file_name)
+                .and_then(|s| s.to_str())
+            {
+                let rss = process.memory();
+                if rss > max_rss_bytes {
+                    max_name = name;
+                    max_rss_bytes = rss;
+                }
+            }
+        }
+
+        let max_rss_gib = max_rss_bytes as f64 / (1 << 30) as f64;
+        let max_rss_rel = max_rss_gib / sys.total_memory() as f64 * 100.0;
+        let col = self.col_load_worst.get(max_rss_rel);
+        let max_rss_str = color(format!("{max_rss_gib:>2.3}"), col);
+        debug!(
+            "about to return worst rss: {max_rss_str}, {max_rss_rel}, {:?}",
+            self.col_load_worst
+        );
+        Ok(format!(
+            "mem [worst {}: {max_rss_str} GiB rss]",
+            color(max_name, GREEN)
+        ))
     }
 }
 
 #[async_trait]
 impl Unit for Mem {
     fn poll_interval(&self) -> f64 {
-        self.poll_interval
+        MEM_POLL_IVAL
     }
 
     async fn read_formatted(&mut self) -> Result<String> {
-        let file = File::open("/proc/meminfo")?;
-        let reader = BufReader::new(file);
-        let lines: Vec<String> = reader.lines().take(3).filter_map(Result::ok).collect();
-
-        if lines.len() < 3 {
-            return Err(anyhow::anyhow!("Failed to read memory information"));
+        match self.mode {
+            MemReadMode::Totals => self.read_formatted_totals(),
+            MemReadMode::WorstProcess => self.read_formatted_worst_rss(),
         }
+    }
 
-        // Parse MemTotal
-        let total_parts: Vec<&str> = lines[0].split_whitespace().collect();
-        if total_parts.len() < 2 {
-            return Err(anyhow::anyhow!("Invalid MemTotal format"));
-        }
-        let total_kib: u64 = total_parts[1].parse()?;
-
-        // Parse MemAvailable
-        let available_parts: Vec<&str> = lines[2].split_whitespace().collect();
-        if available_parts.len() < 2 {
-            return Err(anyhow::anyhow!("Invalid MemAvailable format"));
-        }
-        let available_kib: u64 = available_parts[1].parse()?;
-
-        // Calculate used memory
-        let used_kib = total_kib.saturating_sub(available_kib);
-        let used_frac = used_kib as f64 / total_kib as f64;
-
-        let used_gib = used_kib as f64 / 1_048_576.0; // KiB to GiB
-        let used_percent = used_frac * 100.0;
-
-        let breakpoints = [20.0, 40.0, 60.0, 80.0];
-        let col = get_color(
-            used_percent,
-            &breakpoints,
-            &["#81A2BE", "#B5BD68", "#F0C674", "#DE935F", "#CC6666"],
-            false,
-        );
-
-        let formatted_gib = color(format!("{:.1}", used_gib), &col);
-        let formatted_percent = color(format!("{:.0}", used_percent), &col);
-
-        Ok(format!(
-            "mem [used {} GiB ({}%)]",
-            formatted_gib, formatted_percent
-        ))
+    fn handle_click(&mut self, _click: crate::core::ClickEvent) {
+        // Toggle between totals and worst process mode
+        self.mode = match self.mode {
+            MemReadMode::Totals => MemReadMode::WorstProcess,
+            MemReadMode::WorstProcess => MemReadMode::Totals,
+        };
     }
 }

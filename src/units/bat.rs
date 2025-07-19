@@ -1,4 +1,5 @@
-use crate::core::{color, get_color, ClickEvent, Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
+use crate::core::{ClickEvent, Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
+use crate::display::{color, RangeColorizer, RangeColorizerBuilder};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
@@ -54,6 +55,7 @@ pub struct Bat {
     p_hist: VecDeque<f64>,
     p_hist_maxlen: usize,
     uevent_path: String,
+    pct_colorizer: RangeColorizer,
 }
 
 impl Bat {
@@ -68,6 +70,10 @@ impl Bat {
             p_hist: VecDeque::with_capacity(p_hist_maxlen),
             p_hist_maxlen,
             uevent_path,
+            pct_colorizer: RangeColorizerBuilder::default()
+                .reverse(true)
+                .build()
+                .unwrap(),
         }
     }
 
@@ -214,15 +220,7 @@ impl Unit for Bat {
         } else {
             100.0 * bi.charged_frac
         };
-        let pct_str = color(
-            format!("{pct:3.0}"),
-            &get_color(
-                pct,
-                &[20.0, 40.0, 60.0, 80.0],
-                &[BLUE, GREEN, ORANGE, RED, VIOLET],
-                true,
-            ),
-        );
+        let pct_str = color(format!("{pct:3.0}"), self.pct_colorizer.get(pct));
 
         // Determine battery state
         let mut bs = BatStatus::from_uevent(&uevent);

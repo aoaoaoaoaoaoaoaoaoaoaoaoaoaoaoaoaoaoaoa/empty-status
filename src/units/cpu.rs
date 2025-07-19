@@ -1,4 +1,3 @@
-use crate::core::{color, get_color, make_temp_color_str, Unit, ORANGE, RED};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -6,6 +5,9 @@ use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+
+use crate::core::{Unit, ORANGE, RED};
+use crate::display::{color, RangeColorizer, RangeColorizerBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuData {
@@ -18,9 +20,9 @@ pub struct CpuData {
     err_no_sensors: bool,
 }
 
-pub struct CPU {
-    poll_interval: f64,
+pub struct Cpu {
     show_breakdown: bool,
+    // TODO hot mess, look at rust native apis
     is_intel: bool,
     no_temps: bool,
     prev_total: u64,
@@ -30,19 +32,23 @@ pub struct CPU {
     time_queue: VecDeque<u64>,         // time deltas
     temp_queue: VecDeque<f64>,         // temperatures
     queue_max_size: usize,
+    col_load: RangeColorizer,
+    col_temp: RangeColorizer,
 }
 
-impl CPU {
-    pub fn new(poll_interval: f64) -> Self {
-        let queue_max_size = (2.0 / poll_interval) as usize;
+const CPU_POLL_INTERVAL: f64 = 0.5; // Polling interval in seconds
+
+impl Cpu {
+    pub fn new() -> Self {
+        let queue_max_size = (2.0 / CPU_POLL_INTERVAL) as usize;
         let is_intel = Self::check_is_intel();
         let no_temps = !is_intel && !Self::has_sensors();
 
         // Initial CPU times
         let (total, user, kernel) = Self::read_cpu_times().unwrap_or((0, 0, 0));
+        let colorizer = RangeColorizerBuilder::default().build().unwrap();
 
         Self {
-            poll_interval,
             show_breakdown: false,
             is_intel,
             no_temps,
@@ -53,6 +59,11 @@ impl CPU {
             time_queue: VecDeque::with_capacity(queue_max_size),
             temp_queue: VecDeque::with_capacity(queue_max_size),
             queue_max_size,
+            col_load: colorizer,
+            col_temp: RangeColorizerBuilder::default()
+                .breakpoints(vec![40.0, 50.0, 70.0, 90.0])
+                .build()
+                .unwrap(),
         }
     }
 
@@ -159,9 +170,9 @@ impl CPU {
 }
 
 #[async_trait]
-impl Unit for CPU {
+impl Unit for Cpu {
     fn poll_interval(&self) -> f64 {
-        self.poll_interval
+        CPU_POLL_INTERVAL
     }
 
     async fn read_formatted(&mut self) -> Result<String> {
@@ -264,7 +275,10 @@ impl Unit for CPU {
         } else if data.err_no_temp {
             color("unk", ORANGE)
         } else if let Some(temp) = data.temp_c {
-            format!("{} C", make_temp_color_str(temp))
+            format!(
+                "{} C",
+                color(format!("{temp:>3.0}"), self.col_temp.get(temp))
+            )
         } else {
             color("err", RED)
         };
@@ -273,41 +287,19 @@ impl Unit for CPU {
         let load_str = if self.show_breakdown {
             format!(
                 "u {} k {}",
-                color(
-                    format!("{:.0}%", p_user),
-                    &get_color(
-                        p_user,
-                        &[20.0, 40.0, 60.0, 80.0],
-                        &["#81A2BE", "#B5BD68", "#F0C674", "#DE935F", "#CC6666"],
-                        false
-                    )
-                ),
-                color(
-                    format!("{:.0}%", p_kernel),
-                    &get_color(
-                        p_kernel,
-                        &[20.0, 40.0, 60.0, 80.0],
-                        &["#81A2BE", "#B5BD68", "#F0C674", "#DE935F", "#CC6666"],
-                        false
-                    )
-                )
+                color(format!("{p_user:>3.0}%"), self.col_load.get(p_user)),
+                color(format!("{p_kernel:>3.0}%"), self.col_load.get(p_kernel))
             )
         } else {
             format!(
                 "load {}",
                 color(
-                    format!("{:.0}%", total_usage),
-                    &get_color(
-                        total_usage,
-                        &[20.0, 40.0, 60.0, 80.0],
-                        &["#81A2BE", "#B5BD68", "#F0C674", "#DE935F", "#CC6666"],
-                        false
-                    )
+                    format!("{total_usage:>3.0}%"),
+                    self.col_load.get(total_usage),
                 )
             )
         };
-
-        Ok(format!("cpu [{}] [temp {}]", load_str, temp_str))
+        Ok(format!("cpu [{load_str}] [temp {temp_str}]"))
     }
 
     fn handle_click(&mut self, _click: crate::core::ClickEvent) {

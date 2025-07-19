@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::any::type_name;
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -11,6 +10,8 @@ use tokio::sync::broadcast::{channel, Sender};
 use tokio::time::{interval, sleep};
 use tokio::{select, spawn};
 use tracing::debug;
+
+use crate::display::color;
 
 // Color definitions from the base16 tomorrow theme
 pub const NEAR_BLACK: &str = "#1D1F21";
@@ -113,9 +114,9 @@ async fn read_clicks_task(click_tx: Sender<ClickEvent>) {
     if let Ok(Some(_)) = lines.next_line().await {
         debug!("Skipped first line of click input");
     }
-    if let Ok(Some(_)) = lines.next_line().await {
-        debug!("Skipped second line of click input");
-    }
+    // if let Ok(Some(_)) = lines.next_line().await {
+    //     debug!("Skipped second line of click input");
+    // }
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim();
         if line.is_empty() {
@@ -260,70 +261,6 @@ impl Status {
     }
 }
 
-// Helper functions
-
-// Add color to text using pango markup
-pub fn color<S: Into<String>>(text: S, color: &str) -> String {
-    pangofy(text, Some(color), None)
-}
-
-// Create a pango formatted string
-pub fn pangofy<S: Into<String>>(text: S, color: Option<&str>, background: Option<&str>) -> String {
-    let mut attrs = Vec::new();
-
-    if let Some(c) = color {
-        attrs.push(format!("color='{c}'"));
-    }
-
-    if let Some(bg) = background {
-        attrs.push(format!("background='{bg}'"));
-    }
-
-    let text = text.into();
-    if attrs.is_empty() {
-        text
-    } else {
-        format!("<span {}>{}</span>", attrs.join(" "), text)
-    }
-}
-
-// Get appropriate color based on value and thresholds
-pub fn get_color(value: f64, breakpoints: &[f64], colors: &[&str], reverse: bool) -> String {
-    assert_eq!(colors.len(), breakpoints.len() + 1);
-
-    let colors = if reverse {
-        colors.iter().rev().copied().collect::<Vec<&str>>()
-    } else {
-        colors.to_vec()
-    };
-
-    let mut index = 0;
-    for (i, &bp) in breakpoints.iter().enumerate() {
-        if value <= bp {
-            index = i;
-            break;
-        }
-        index = i + 1;
-    }
-
-    colors[index].to_string()
-}
-
-// Format a temperature value with color
-pub fn make_temp_color_str(temp: f64) -> String {
-    let breakpoints = [30.0, 50.0, 70.0, 90.0];
-    let colors = [BLUE, GREEN, YELLOW, ORANGE, RED];
-
-    if temp < 100.0 {
-        color(
-            format!("{temp:.0}"),
-            &get_color(temp, &breakpoints, &colors, false),
-        )
-    } else {
-        pangofy(format!("{temp:.0}"), Some(WHITE), Some(RED))
-    }
-}
-
 // Format a value, automatically choosing a time unit
 pub fn format_duration(seconds: f64) -> String {
     if seconds < 60.0 {
@@ -378,12 +315,4 @@ pub fn format_duration(seconds: f64) -> String {
     } else {
         " > 10 y  ".to_string()
     }
-}
-
-// Helper to format a float with color based on thresholds
-pub fn colorize_float(val: f64, width: usize, prec: usize, breakpoints: &[f64]) -> String {
-    color(
-        format!("{val:width$.prec$}"),
-        &get_color(val, breakpoints, &[BLUE, GREEN, YELLOW, ORANGE, RED], false),
-    )
 }
