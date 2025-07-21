@@ -1,28 +1,35 @@
+use crate::mode_enum;
+use crate::util::RotateEnum;
 use crate::{
-    core::{self, format_duration, Unit},
-    display::{color, RangeColorizer, RangeColorizerBuilder},
+    core::Unit,
+    display::{color, format_duration, RangeColorizer, RangeColorizerBuilder},
+    impl_handle_click_rotate_mode, register_unit,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Local;
-use sysinfo::{LoadAvg, System};
+use serde::Deserialize;
+use serde_inline_default::serde_inline_default;
+use sysinfo::System;
 
-#[derive(Debug, Clone)]
-pub struct TimeData {
-    datestr: String,
-    uptime: u64,
-    load_avg: LoadAvg,
+mode_enum!(DateTime, Uptime);
+
+#[serde_inline_default]
+#[derive(Debug, Clone, Deserialize)]
+pub struct TimeConfig {
+    #[serde_inline_default("%a %b %d %Y - %H:%M".to_string())]
+    format: String,
 }
 
+#[derive(Debug)]
 pub struct Time {
-    poll_interval: f64,
-    format: String,
-    doing_uptime: bool,
+    cfg: TimeConfig,
+    mode: DisplayMode,
     colorizer: RangeColorizer,
 }
 
 impl Time {
-    pub fn new(format: String, poll_interval: f64) -> Self {
+    pub fn from_cfg(cfg: TimeConfig) -> Self {
         let ncpu = num_cpus::get() as f64;
         let load_color_scale = RangeColorizerBuilder::default()
             .breakpoints(vec![ncpu * 0.1, ncpu * 0.25, ncpu * 0.50, ncpu * 0.75])
@@ -30,56 +37,41 @@ impl Time {
             .unwrap();
 
         Self {
-            poll_interval,
-            format,
-            doing_uptime: false,
+            cfg,
+            mode: DisplayMode::DateTime,
             colorizer: load_color_scale,
         }
+    }
+
+    fn read_formatted_datetime(&self) -> Result<String> {
+        let current_time = Local::now().format(&self.cfg.format).to_string();
+        Ok(current_time)
+    }
+
+    fn read_formatted_uptime(&self) -> Result<String> {
+        let uptime = System::uptime();
+        let load_avg = System::load_average();
+        let ut_s = format_duration(uptime as f64);
+        let mut load_strings = Vec::new();
+        for data in [&load_avg.one, &load_avg.five, &load_avg.fifteen] {
+            load_strings.push(color(format!("{data:>3.2}"), self.colorizer.get(*data)));
+        }
+        Ok(format!(
+            "uptime [{ut_s}] load [{}/{}/{}]",
+            load_strings[0], load_strings[1], load_strings[2]
+        ))
     }
 }
 
 #[async_trait]
 impl Unit for Time {
-    fn poll_interval(&self) -> f64 {
-        self.poll_interval
-    }
-
     async fn read_formatted(&mut self) -> Result<String> {
-        let current_time = Local::now().format(&self.format).to_string();
-        let uptime = System::uptime();
-        let load_avg = System::load_average();
-
-        let data = TimeData {
-            datestr: current_time,
-            uptime,
-            load_avg,
-        };
-
-        if !self.doing_uptime {
-            // Show date/time
-            Ok(data.datestr)
-        } else {
-            // Show uptime and load average
-            let ut_s = format_duration(data.uptime as f64);
-
-            let mut load_strings = Vec::new();
-            for data in [
-                &data.load_avg.one,
-                &data.load_avg.five,
-                &data.load_avg.fifteen,
-            ] {
-                load_strings.push(color(format!("{data:>3.2}"), self.colorizer.get(*data)));
-            }
-
-            Ok(format!(
-                "uptime [{ut_s}] load [{}/{}/{}]",
-                load_strings[0], load_strings[1], load_strings[2]
-            ))
+        match self.mode {
+            DisplayMode::DateTime => self.read_formatted_datetime(),
+            DisplayMode::Uptime => self.read_formatted_uptime(),
         }
     }
-
-    fn handle_click(&mut self, _click: core::ClickEvent) {
-        // Toggle between time display and uptime display
-        self.doing_uptime = !self.doing_uptime;
-    }
+    impl_handle_click_rotate_mode!();
 }
+
+register_unit!(Time, TimeConfig);

@@ -1,53 +1,47 @@
+#![cfg(target_os = "linux")]
+mod config;
 mod core;
 mod display;
+mod registry;
 mod units;
+mod util;
 
-use tracing::info;
-use tracing_appender::non_blocking;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::fmt;
+use anyhow::Result;
+use tracing::{info, level_filters::LevelFilter};
+use tracing_appender::{
+    non_blocking,
+    rolling::{RollingFileAppender, Rotation},
+};
+use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::core::Status;
+use crate::config::load_status_from_cfg;
 
-// TODO nuke
-fn init_file_logger() -> tracing_appender::non_blocking::WorkerGuard {
-    // produce a timestamped filename under /tmp
-    let filename = format!("i3status.log");
-    // Rotation::NEVER means "never roll over"; it just creates a single file.
+inventory::collect!(crate::registry::UnitFactory);
+
+fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
+    let bd = xdg::BaseDirectories::with_prefix("empty-status");
+    let log_dir = bd.get_state_home()?;
+    let filename = "last.log";
     let file_appender: RollingFileAppender =
-        RollingFileAppender::new(Rotation::NEVER, "/tmp", filename);
-    // non-blocking wrapper to avoid blocking your status‐bar event loop
+        RollingFileAppender::new(Rotation::NEVER, log_dir, filename);
     let (non_blocking_appender, guard) = non_blocking(file_appender);
-    // install a subscriber that writes only to our file
+
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
     fmt()
+        .with_env_filter(filter)
         .with_writer(non_blocking_appender)
-        .with_max_level(tracing::Level::TRACE)
         .init();
-    guard // must be held for the lifetime of the program so it can flush
+
+    Some(guard) // must be held for the lifetime of the program so it can flush
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     let _guard = init_file_logger();
-
-    info!("\n\nStarting Emtpy Status Bar!");
-
-    // Define units to display in the status bar
-    let units: Vec<Box<dyn core::Unit>> = vec![
-        // Box::new(units::bat::RS9Bat::new(5.0)),
-        Box::new(units::net::Net::new("e0")),
-        Box::new(units::disk::Disk::new("nvme0n1p2")),
-        // Box::new(units::wifi::RS9Wifi::new(5.0)),
-        Box::new(units::mem::Mem::new()),
-        Box::new(units::cpu::Cpu::new()),
-        Box::new(units::time::Time::new(
-            "%a %b %d %Y - %H:%M".to_string(),
-            0.7,
-        )),
-    ];
-
-    let rs9status = Status::new(units, 0.1, 1)?;
-    rs9status.run().await;
-
+    info!("starting empty-status");
+    let status = load_status_from_cfg()?;
+    status.run().await;
     Ok(())
 }

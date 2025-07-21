@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde_inline_default::serde_inline_default;
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -8,26 +9,37 @@ use std::process::{Command, Stdio};
 
 use crate::core::{Unit, ORANGE, RED};
 use crate::display::{color, RangeColorizer, RangeColorizerBuilder};
+use crate::util::RotateEnum;
+use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CpuData {
+#[derive(Debug, Clone)]
+struct CpuData {
     p_user: f64,
     p_kernel: f64,
-    p_user_avg: f64,
-    p_kernel_avg: f64,
     temp_c: Option<f64>,
     err_no_temp: bool,
     err_no_sensors: bool,
 }
 
+mode_enum!(Combined, Breakdown);
+
+#[serde_inline_default]
+#[derive(Debug, Clone, Deserialize)]
+pub struct CpuConfig {
+    #[serde_inline_default(0.25)]
+    poll_interval: f64,
+}
+
+#[derive(Debug)]
 pub struct Cpu {
-    show_breakdown: bool,
+    cfg: CpuConfig,
+    mode: DisplayMode,
     // TODO hot mess, look at rust native apis
-    is_intel: bool,
     no_temps: bool,
     prev_total: u64,
     prev_user: u64,
     prev_kernel: u64,
+    is_intel: bool,
     usage_queue: VecDeque<(f64, f64)>, // (user, kernel) fractions
     time_queue: VecDeque<u64>,         // time deltas
     temp_queue: VecDeque<f64>,         // temperatures
@@ -36,11 +48,9 @@ pub struct Cpu {
     col_temp: RangeColorizer,
 }
 
-const CPU_POLL_INTERVAL: f64 = 0.5; // Polling interval in seconds
-
 impl Cpu {
-    pub fn new() -> Self {
-        let queue_max_size = (2.0 / CPU_POLL_INTERVAL) as usize;
+    pub fn from_cfg(cfg: CpuConfig) -> Self {
+        let queue_max_size = (2.0 / cfg.poll_interval) as usize;
         let is_intel = Self::check_is_intel();
         let no_temps = !is_intel && !Self::has_sensors();
 
@@ -49,7 +59,8 @@ impl Cpu {
         let colorizer = RangeColorizerBuilder::default().build().unwrap();
 
         Self {
-            show_breakdown: false,
+            cfg,
+            mode: DisplayMode::Combined,
             is_intel,
             no_temps,
             prev_total: total,
@@ -168,13 +179,8 @@ impl Cpu {
         }
     }
 }
-
 #[async_trait]
 impl Unit for Cpu {
-    fn poll_interval(&self) -> f64 {
-        CPU_POLL_INTERVAL
-    }
-
     async fn read_formatted(&mut self) -> Result<String> {
         // Read CPU times
         let (total, user, kernel) = Self::read_cpu_times()?;
@@ -205,37 +211,9 @@ impl Unit for Cpu {
         self.usage_queue.push_back((p_user, p_kernel));
         self.time_queue.push_back(d_total as u64);
 
-        // Calculate average usage
-        let mut total_user = 0.0;
-        let mut total_kernel = 0.0;
-        let mut _total_time = 0.0;
-
-        for &(u, k) in &self.usage_queue {
-            total_user += u;
-            total_kernel += k;
-        }
-
-        for &t in &self.time_queue {
-            _total_time += t as f64;
-        }
-
-        let queue_size = self.usage_queue.len() as f64;
-        let p_user_avg = if queue_size > 0.0 {
-            total_user / queue_size
-        } else {
-            0.0
-        };
-        let p_kernel_avg = if queue_size > 0.0 {
-            total_kernel / queue_size
-        } else {
-            0.0
-        };
-
         let mut data = CpuData {
             p_user,
             p_kernel,
-            p_user_avg,
-            p_kernel_avg,
             temp_c: None,
             err_no_temp: false,
             err_no_sensors: false,
@@ -284,7 +262,7 @@ impl Unit for Cpu {
         };
 
         // Format load
-        let load_str = if self.show_breakdown {
+        let load_str = if self.mode == DisplayMode::Breakdown {
             format!(
                 "u {} k {}",
                 color(format!("{p_user:>3.0}%"), self.col_load.get(p_user)),
@@ -302,8 +280,7 @@ impl Unit for Cpu {
         Ok(format!("cpu [{load_str}] [temp {temp_str}]"))
     }
 
-    fn handle_click(&mut self, _click: crate::core::ClickEvent) {
-        // Toggle between combined and breakdown view
-        self.show_breakdown = !self.show_breakdown;
-    }
+    impl_handle_click_rotate_mode!();
 }
+
+register_unit!(Cpu, CpuConfig);

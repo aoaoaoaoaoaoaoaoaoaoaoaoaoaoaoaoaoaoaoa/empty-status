@@ -1,17 +1,15 @@
-use crate::core::{ClickEvent, Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
+use crate::core::{Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
 use crate::display::{color, RangeColorizer, RangeColorizerBuilder};
+use crate::util::RotateEnum;
+use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatDisplayMode {
-    CurCapacity,
-    DesignCapacity,
-    VoltageCurrent,
-}
+mode_enum!(CurCapacity, DesignCapacity, VoltageCurrent);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 enum BatStatus {
@@ -47,11 +45,18 @@ impl BatStatus {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatConfig {
+    pub poll_interval: f64,
+    pub bat_id: usize,
+}
+
+#[derive(Debug)]
 pub struct Bat {
-    poll_interval: f64,
-    min_rem_smooth: Option<f64>,
-    mode: BatDisplayMode,
+    cfg: BatConfig,
+    mode: DisplayMode,
     cur_status: BatStatus,
+    min_rem_smooth: Option<f64>,
     p_hist: VecDeque<f64>,
     p_hist_maxlen: usize,
     uevent_path: String,
@@ -59,13 +64,14 @@ pub struct Bat {
 }
 
 impl Bat {
-    pub fn new(poll_interval: f64, bat_id: usize) -> Self {
-        let uevent_path = format!("/sys/class/power_supply/BAT{bat_id}/uevent");
-        let p_hist_maxlen = (10.0 / poll_interval).ceil() as usize;
+    pub fn from_cfg(cfg: BatConfig) -> Self {
+        // TODO seems fragile? use a crate etc.
+        let uevent_path = format!("/sys/class/power_supply/BAT{}/uevent", cfg.bat_id);
+        let p_hist_maxlen = (10.0 / cfg.poll_interval).ceil() as usize;
         Self {
-            poll_interval,
+            cfg,
+            mode: DisplayMode::CurCapacity,
             min_rem_smooth: None,
-            mode: BatDisplayMode::CurCapacity,
             cur_status: BatStatus::Unknown,
             p_hist: VecDeque::with_capacity(p_hist_maxlen),
             p_hist_maxlen,
@@ -178,10 +184,6 @@ impl BatteryInfo {
 
 #[async_trait]
 impl Unit for Bat {
-    fn poll_interval(&self) -> f64 {
-        self.poll_interval
-    }
-
     async fn read_formatted(&mut self) -> Result<String> {
         let mut missing = false;
         let uevent = match self.parse_uevent() {
@@ -215,7 +217,7 @@ impl Unit for Bat {
             bi.power
         };
 
-        let pct = if self.mode == BatDisplayMode::DesignCapacity {
+        let pct = if self.mode == DisplayMode::DesignCapacity {
             100.0 * bi.charged_frac_design
         } else {
             100.0 * bi.charged_frac
@@ -264,10 +266,10 @@ impl Unit for Bat {
             None => String::from("--:--"),
         };
 
-        if self.mode != BatDisplayMode::VoltageCurrent {
+        if self.mode != DisplayMode::VoltageCurrent {
             let brackets = match self.mode {
-                BatDisplayMode::CurCapacity => ["{", "}"],
-                BatDisplayMode::DesignCapacity => ["<", ">"],
+                DisplayMode::CurCapacity => ["{", "}"],
+                DisplayMode::DesignCapacity => ["<", ">"],
                 _ => unreachable!(), // TODO fugly learn how to handle shared destructure with
                                      // fallthrough
             };
@@ -286,18 +288,7 @@ impl Unit for Bat {
             Ok(format!("({voltage} | {current})"))
         }
     }
-
-    fn handle_click(&mut self, _click: ClickEvent) {
-        match self.mode {
-            BatDisplayMode::CurCapacity => {
-                self.mode = BatDisplayMode::DesignCapacity;
-            }
-            BatDisplayMode::DesignCapacity => {
-                self.mode = BatDisplayMode::VoltageCurrent;
-            }
-            BatDisplayMode::VoltageCurrent => {
-                self.mode = BatDisplayMode::CurCapacity;
-            }
-        }
-    }
+    impl_handle_click_rotate_mode!();
 }
+
+register_unit!(Bat, BatConfig);

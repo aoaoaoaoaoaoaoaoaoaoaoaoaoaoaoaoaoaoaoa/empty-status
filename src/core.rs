@@ -6,21 +6,23 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::sync::broadcast::{channel, Sender};
 use tokio::time::{interval, sleep};
 use tokio::{select, spawn};
-use tracing::debug;
+use tracing::warn;
 
+use crate::config::{GlobalConfig, SchedulingCfg};
 use crate::display::color;
 
 // Color definitions from the base16 tomorrow theme
-pub const NEAR_BLACK: &str = "#1D1F21";
-pub const DARKER_GREY: &str = "#282A2E";
+// pub const NEAR_BLACK: &str = "#1D1F21";
+// pub const DARKER_GREY: &str = "#282A2E";
 pub const DARK_GREY: &str = "#373B41";
 pub const GREY: &str = "#969896";
-pub const LIGHT_GREY: &str = "#B4B7B4";
-pub const LIGHTER_GREY: &str = "#C5C8C6";
-pub const NEAR_WHITE: &str = "#E0E0E0";
+// pub const LIGHT_GREY: &str = "#B4B7B4";
+// pub const LIGHTER_GREY: &str = "#C5C8C6";
+// pub const NEAR_WHITE: &str = "#E0E0E0";
 pub const WHITE: &str = "#FFFFFF";
 pub const RED: &str = "#CC6666";
 pub const ORANGE: &str = "#DE935F";
@@ -47,10 +49,10 @@ pub struct OutputChunk {
 }
 
 impl OutputChunk {
-    pub fn new(name: String, text: String) -> Self {
+    pub fn new(name: &str, text: String) -> Self {
         Self {
             full_text: text,
-            name,
+            name: name.to_string(),
             markup: "pango".to_string(),
             border: DARK_GREY.to_string(),
             separator: "false".to_string(),
@@ -76,91 +78,58 @@ pub struct ClickEvent {
 }
 
 #[async_trait]
-pub trait Unit: Send + Sync {
-    fn name(&self) -> String {
-        type_name::<Self>().to_string()
+pub trait Unit: Send + Sync + std::fmt::Debug {
+    fn name(&self) -> &'static str {
+        type_name::<Self>()
     }
-    fn poll_interval(&self) -> f64;
 
     // Main method to read and format unit's data
     async fn read_formatted(&mut self) -> Result<String>;
 
-    // Process the unit's output with the padding
-    fn process_chunk(&self, text: String, padding: i32) -> OutputChunk {
-        let mut chunk = OutputChunk::new(self.name(), text);
-
-        let pad = " ".repeat(padding as usize);
-        chunk.full_text = format!("{pad}{}{pad}", chunk.full_text);
-
-        chunk
-    }
-
     // Handle click events
-    fn handle_click(&mut self, _click: ClickEvent) {}
+    fn handle_click(&mut self, _click: ClickEvent);
 }
 
-pub struct Status {
-    units: Vec<Box<dyn Unit>>,
-    padding: i32,
-    min_sleep: f64,
-    unit_outputs: Arc<Mutex<std::collections::HashMap<String, OutputChunk>>>,
+pub struct UnitWrapper {
+    pub unit: Box<dyn Unit>,
+    pub cfg: SchedulingCfg,
+}
+
+pub struct EmptyStatus {
+    wrappers: Vec<UnitWrapper>,
+    cfg: GlobalConfig,
+    unit_outputs: Arc<Mutex<std::collections::HashMap<&'static str, OutputChunk>>>,
     click_tx: Sender<ClickEvent>,
 }
 
-async fn read_clicks_task(click_tx: Sender<ClickEvent>) {
-    use tokio::io::{stdin, AsyncBufReadExt, BufReader};
-    use tracing::{debug, warn};
-    let mut lines = BufReader::new(stdin()).lines();
-    if let Ok(Some(_)) = lines.next_line().await {
-        debug!("Skipped first line of click input");
-    }
-    // if let Ok(Some(_)) = lines.next_line().await {
-    //     debug!("Skipped second line of click input");
-    // }
-    while let Ok(Some(line)) = lines.next_line().await {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let line = line.trim_end_matches(',');
-        match serde_json::from_str::<ClickEvent>(line.trim_start_matches(',')) {
-            Ok(click) => {
-                debug!(?click, "Received click event");
-                let _ = click_tx.send(click);
-            }
-            Err(e) => {
-                warn!(%line, %e, "Failed to parse click event");
-            }
-        }
-    }
-}
-
-impl Status {
-    pub fn new(units: Vec<Box<dyn Unit>>, min_sleep: f64, padding: i32) -> Result<Self> {
+impl EmptyStatus {
+    pub fn new(units: Vec<UnitWrapper>, cfg: GlobalConfig) -> Result<Self> {
         // Check for duplicate unit names
         let mut names = HashSet::new();
-        for unit in &units {
-            let name = unit.name();
-            if !names.insert(name.clone()) {
+        for su in &units {
+            let name = su.unit.name();
+            if !names.insert(name) {
                 return Err(anyhow!("Duplicate unit name: {name}"));
             }
         }
 
         // Initialize unit outputs
         let mut unit_outputs = std::collections::HashMap::new();
-        for unit in &units {
-            let name = unit.name();
-            let chunk =
-                unit.process_chunk(color(format!("unit '{name}' loading"), VIOLET), padding);
+        for su in &units {
+            let name = su.unit.name();
+            let chunk = process_chunk(
+                su.unit.name(),
+                color(format!("unit '{name}' loading"), VIOLET),
+                cfg.padding,
+            );
             unit_outputs.insert(name, chunk);
         }
 
         let (click_tx, _) = channel::<ClickEvent>(16);
 
         Ok(Self {
-            units,
-            padding,
-            min_sleep,
+            wrappers: units,
+            cfg,
             unit_outputs: Arc::new(Mutex::new(unit_outputs)),
             click_tx,
         })
@@ -170,27 +139,25 @@ impl Status {
     pub async fn run(self) {
         println!("{{\"version\":1,\"click_events\":true}}\n[");
 
-        let Status {
-            units,
-            padding,
-            min_sleep,
+        let EmptyStatus {
+            wrappers,
+            cfg,
             unit_outputs,
             click_tx,
         } = self;
 
         // Precompute order of names for the writer task (since units are moved away).
-        let unit_names: Vec<String> = units.iter().map(|u| u.name()).collect();
+        let unit_names: Vec<&'static str> = wrappers.iter().map(|u| u.unit.name()).collect();
 
         spawn(read_clicks_task(click_tx.clone()));
 
         // Spawn one task per unit, moving each unit in.
-        for mut unit in units.into_iter() {
-            let unit_name = unit.name(); // copy String (returned new String each call)
-            let poll_interval = unit.poll_interval();
+        for mut uwrp in wrappers.into_iter() {
+            let unit_name = uwrp.unit.name();
             let outputs = Arc::clone(&unit_outputs);
             let mut rx = click_tx.subscribe();
 
-            let mut ticker = interval(Duration::from_secs_f64(poll_interval));
+            let mut ticker = interval(Duration::from_secs_f64(uwrp.cfg.poll_interval));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             ticker.tick().await; // Initial tick to avoid delay
 
@@ -199,7 +166,7 @@ impl Status {
                     let do_refresh = select! {
                         Ok(click) = rx.recv() => {
                             if click.name == unit_name {
-                                unit.handle_click(click);
+                                uwrp.unit.handle_click(click);
                                 true // Refresh on click
                             } else {
                                 false // Ignore clicks for other units
@@ -208,16 +175,19 @@ impl Status {
                         _ = ticker.tick() => true
                     };
                     if do_refresh {
-                        let result = match unit.read_formatted().await {
+                        let result = match uwrp.unit.read_formatted().await {
                             Err(e) => color(format!("{unit_name} failed: {e}"), BROWN),
                             Ok(formatted) => formatted,
                         };
 
                         let mut guard = outputs.lock().unwrap();
-                        guard.insert(unit_name.clone(), unit.process_chunk(result, padding));
+                        guard.insert(unit_name, process_chunk(unit_name, result, cfg.padding));
                     }
 
-                    sleep(Duration::from_millis((poll_interval * 250.0) as u64)).await;
+                    sleep(Duration::from_millis(
+                        (uwrp.cfg.poll_interval * 250.0) as u64,
+                    ))
+                    .await;
                 }
             });
         }
@@ -227,7 +197,7 @@ impl Status {
             let outputs = Arc::clone(&unit_outputs);
             let unit_names = unit_names.clone();
             spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs_f64(min_sleep));
+                let mut interval = tokio::time::interval(Duration::from_secs_f64(cfg.min_sleep));
                 loop {
                     interval.tick().await;
                     let guard = outputs.lock().unwrap();
@@ -260,59 +230,32 @@ impl Status {
         std::future::pending::<()>().await;
     }
 }
+// Process the unit's output with the padding
+fn process_chunk(name: &str, text: String, padding: i32) -> OutputChunk {
+    let mut chunk = OutputChunk::new(name, text);
 
-// Format a value, automatically choosing a time unit
-pub fn format_duration(seconds: f64) -> String {
-    if seconds < 60.0 {
-        // Handle small values
-        let (value, unit) = if seconds < 1e-9 {
-            (seconds * 1e12, "ps")
-        } else if seconds < 1e-6 {
-            (seconds * 1e9, "ns")
-        } else if seconds < 1e-3 {
-            (seconds * 1e6, "μs")
-        } else if seconds < 1.0 {
-            (seconds * 1e3, "ms")
-        } else {
-            (seconds, "s")
-        };
+    let pad = " ".repeat(padding as usize);
+    chunk.full_text = format!("{pad}{}{pad}", chunk.full_text);
 
-        let precision = std::cmp::max(0, 2 - value.log10().floor() as i32);
-        format!(
-            "  {:.precision$} {:<2} ",
-            value,
-            unit,
-            precision = precision as usize
-        )
-    } else if seconds < 3155760000.0 {
-        // Less than 10 years
-        if seconds < 3600.0 {
-            // < 1 hour
-            let min = (seconds / 60.0).floor() as i32;
-            let sec = (seconds % 60.0) as i32;
-            format!("{min:2} m {sec:2} s")
-        } else if seconds < 86400.0 {
-            // < 1 day
-            let hr = (seconds / 3600.0).floor() as i32;
-            let min = ((seconds % 3600.0) / 60.0) as i32;
-            format!("{hr:2} h {min:2} m")
-        } else if seconds < 604800.0 {
-            // < 1 week
-            let day = (seconds / 86400.0).floor() as i32;
-            let hr = ((seconds % 86400.0) / 3600.0) as i32;
-            format!("{day:2} d {hr:2} h")
-        } else if seconds < 31557600.0 {
-            // < 1 year
-            let week = (seconds / 604800.0).floor() as i32;
-            let day = ((seconds % 604800.0) / 86400.0) as i32;
-            format!("{week:2} w {day:2} d")
-        } else {
-            // < 10 years
-            let year = (seconds / 31557600.0).floor() as i32;
-            let week = ((seconds % 31557600.0) / 604800.0) as i32;
-            format!("{year:2} y {week:2} w")
+    chunk
+}
+
+async fn read_clicks_task(click_tx: Sender<ClickEvent>) {
+    let mut lines = BufReader::new(stdin()).lines();
+    let _ = lines.next_line().await;
+    while let Ok(Some(line)) = lines.next_line().await {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
-    } else {
-        " > 10 y  ".to_string()
+        let line = line.trim_end_matches(',');
+        match serde_json::from_str::<ClickEvent>(line.trim_start_matches(',')) {
+            Ok(click) => {
+                let _ = click_tx.send(click);
+            }
+            Err(e) => {
+                warn!(%line, %e, "Failed to parse click event");
+            }
+        }
     }
 }

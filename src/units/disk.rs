@@ -1,44 +1,48 @@
 use crate::core::{Unit, BLUE, BROWN, ORANGE};
 use crate::display::color;
-use anyhow::{anyhow, Result};
+use crate::{impl_handle_click_nop, register_unit};
+use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fs::{read_dir, read_to_string, File};
 use std::io::Read;
 use std::time::Instant;
-use std::u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiskData {
+struct DiskData {
     bps_read: f64,
     bps_write: f64,
     err_no_disk: bool,
 }
 
-pub struct Disk {
+#[derive(Debug, Clone, Deserialize)]
+pub struct DiskConfig {
     disk: String,
+}
+
+#[derive(Debug)]
+pub struct Disk {
+    cfg: DiskConfig,
     stat_path: String,
     sector_size: u64,
     last_r: u64,
     last_w: u64,
     last_t: Instant,
-    fail: bool,
 }
 
 impl Disk {
-    pub fn new(disk: &str) -> Self {
-        let stat_path = format!("/sys/class/block/{disk}/stat");
+    pub fn from_cfg(cfg: DiskConfig) -> Self {
+        let stat_path = format!("/sys/class/block/{}/stat", cfg.disk);
         // TODO evetually we'll make these Results and handle construction with toml config
-        let sector_size = Self::get_sector_size(disk).unwrap();
+        let sector_size = Self::get_sector_size(&cfg.disk).unwrap();
         let (last_r, last_w) = Self::read_rw(&stat_path, sector_size).unwrap();
         Self {
-            disk: disk.to_string(),
+            cfg,
             stat_path,
             sector_size,
             last_r,
             last_w,
             last_t: Instant::now(),
-            fail: false,
         }
     }
 
@@ -72,16 +76,7 @@ impl Disk {
 
 #[async_trait]
 impl Unit for Disk {
-    fn poll_interval(&self) -> f64 {
-        1.0
-    }
-
     async fn read_formatted(&mut self) -> Result<String> {
-        if self.sector_size == 0 {
-            self.sector_size = Self::get_sector_size(&self.disk)
-                .ok_or_else(|| anyhow!("could not get sector size"))?;
-        }
-
         let mut data = DiskData {
             bps_read: 0.0,
             bps_write: 0.0,
@@ -92,7 +87,7 @@ impl Unit for Disk {
             Ok((r, w)) => (r, w),
             Err(_) => {
                 data.err_no_disk = true;
-                let context = format!("disk [{} {{}}]", self.disk);
+                let context = format!("disk {} [{{}}]", self.cfg.disk);
                 return Ok(context.replace("{}", &color("absent", BROWN)));
             }
         };
@@ -108,12 +103,13 @@ impl Unit for Disk {
         data.bps_read = if dt > 0.0 { dr as f64 / dt } else { 0.0 };
         data.bps_write = if dt > 0.0 { dw as f64 / dt } else { 0.0 };
 
-        let context = format!("disk [{} {{}}]", self.disk);
+        let context = format!("disk {} [{{}}]", self.cfg.disk);
 
         if data.err_no_disk {
             return Ok(context.replace("{}", &color("absent", BROWN)));
         }
 
+        // TODO this unit is an inefficient autoported python mess, clean up
         let bars = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
         let threshs = [
             1.0, 1024.0, 4096.0, 16384.0, 65536.0, 262144.0, 1048576.0, 4194304.0, 16777216.0,
@@ -134,7 +130,7 @@ impl Unit for Disk {
         Ok(context.replace("{}", &(color(r_bar, BLUE) + &color(w_bar, ORANGE))))
     }
 
-    fn handle_click(&mut self, _click: crate::core::ClickEvent) {
-        // No click handling for disk
-    }
+    impl_handle_click_nop!();
 }
+
+register_unit!(Disk, DiskConfig);
