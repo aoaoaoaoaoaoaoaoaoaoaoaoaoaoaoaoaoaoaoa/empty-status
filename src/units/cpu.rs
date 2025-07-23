@@ -1,80 +1,50 @@
+use crate::util::RotateEnum;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
-use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
-use crate::core::{Unit, ORANGE, RED};
-use crate::display::{color, RangeColorizer, RangeColorizerBuilder};
-use crate::util::RotateEnum;
+use crate::core::{Unit, BROWN, RED, VIOLET};
+use crate::display::{color, color_by_pct, color_by_pct_custom};
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
-
-#[derive(Debug, Clone)]
-struct CpuData {
-    p_user: f64,
-    p_kernel: f64,
-    temp_c: Option<f64>,
-    err_no_temp: bool,
-    err_no_sensors: bool,
-}
 
 mode_enum!(Combined, Breakdown);
 
 #[serde_inline_default]
 #[derive(Debug, Clone, Deserialize)]
-pub struct CpuConfig {
-    #[serde_inline_default(0.25)]
-    poll_interval: f64,
-}
+pub struct CpuConfig {}
 
 #[derive(Debug)]
 pub struct Cpu {
-    cfg: CpuConfig,
     mode: DisplayMode,
     // TODO hot mess, look at rust native apis
     no_temps: bool,
+    // TODO use sysinfo -- iterating over cpus might be annoying though, its api
+    // looks a little bare bones...
     prev_total: u64,
     prev_user: u64,
     prev_kernel: u64,
     is_intel: bool,
-    usage_queue: VecDeque<(f64, f64)>, // (user, kernel) fractions
-    time_queue: VecDeque<u64>,         // time deltas
-    temp_queue: VecDeque<f64>,         // temperatures
-    queue_max_size: usize,
-    col_load: RangeColorizer,
-    col_temp: RangeColorizer,
 }
 
 impl Cpu {
-    pub fn from_cfg(cfg: CpuConfig) -> Self {
-        let queue_max_size = (2.0 / cfg.poll_interval) as usize;
+    pub fn from_cfg(_cfg: CpuConfig) -> Self {
         let is_intel = Self::check_is_intel();
         let no_temps = !is_intel && !Self::has_sensors();
 
         // Initial CPU times
         let (total, user, kernel) = Self::read_cpu_times().unwrap_or((0, 0, 0));
-        let colorizer = RangeColorizerBuilder::default().build().unwrap();
 
         Self {
-            cfg,
             mode: DisplayMode::Combined,
             is_intel,
             no_temps,
             prev_total: total,
             prev_user: user,
             prev_kernel: kernel,
-            usage_queue: VecDeque::with_capacity(queue_max_size),
-            time_queue: VecDeque::with_capacity(queue_max_size),
-            temp_queue: VecDeque::with_capacity(queue_max_size),
-            queue_max_size,
-            col_load: colorizer,
-            col_temp: RangeColorizerBuilder::default()
-                .breakpoints(vec![40.0, 50.0, 70.0, 90.0])
-                .build()
-                .unwrap(),
         }
     }
 
@@ -125,6 +95,7 @@ impl Cpu {
         }
     }
 
+    // TODO jank use Sensors
     fn read_temp_intel(&self) -> Result<f64> {
         let mut temp_sum = 0.0;
         let mut count = 0;
@@ -151,6 +122,7 @@ impl Cpu {
         }
     }
 
+    // TODO jank use Sensors
     fn read_temp_amd(&self) -> Result<f64> {
         let output = Command::new("/usr/bin/sensors").output()?;
         let output = String::from_utf8(output.stdout)?;
@@ -181,9 +153,15 @@ impl Cpu {
 }
 #[async_trait]
 impl Unit for Cpu {
-    async fn read_formatted(&mut self) -> Result<String> {
+    async fn read_formatted(&mut self) -> String {
         // Read CPU times
-        let (total, user, kernel) = Self::read_cpu_times()?;
+        let (total, user, kernel) = match Self::read_cpu_times() {
+            Ok(times) => times,
+            Err(_) => {
+                self.no_temps = true; // If we can't read times, assume no sensors
+                return color("read err", BROWN);
+            }
+        };
 
         let d_total = total.saturating_sub(self.prev_total) as f64;
         let d_user = user.saturating_sub(self.prev_user) as f64;
@@ -202,82 +180,40 @@ impl Unit for Cpu {
             0.0
         };
 
-        // Update usage queue
-        if self.usage_queue.len() >= self.queue_max_size {
-            self.usage_queue.pop_front();
-            self.time_queue.pop_front();
-        }
-
-        self.usage_queue.push_back((p_user, p_kernel));
-        self.time_queue.push_back(d_total as u64);
-
-        let mut data = CpuData {
-            p_user,
-            p_kernel,
-            temp_c: None,
-            err_no_temp: false,
-            err_no_sensors: false,
-        };
-
-        // Read temperature
-        if !self.no_temps {
-            match self.read_temp() {
-                Ok(temp) => {
-                    // Update temp queue
-                    if self.temp_queue.len() >= self.queue_max_size {
-                        self.temp_queue.pop_front();
-                    }
-                    self.temp_queue.push_back(temp);
-
-                    // Calculate average temp
-                    let avg_temp: f64 =
-                        self.temp_queue.iter().sum::<f64>() / self.temp_queue.len() as f64;
-                    data.temp_c = Some(avg_temp);
-                }
-                Err(_) => {
-                    data.err_no_temp = true;
-                }
-            }
-        } else {
-            data.err_no_sensors = true;
-        }
-
-        // Get CPU usage values
-        let p_user = data.p_user * 100.0;
-        let p_kernel = data.p_kernel * 100.0;
+        let p_user = p_user * 100.0;
+        let p_kernel = p_kernel * 100.0;
         let total_usage = p_user + p_kernel;
 
-        // Format temperature
-        let temp_str = if data.err_no_sensors {
+        let temp_str = if self.no_temps {
             color("no sensors", RED)
-        } else if data.err_no_temp {
-            color("unk", ORANGE)
-        } else if let Some(temp) = data.temp_c {
-            format!(
-                "{} C",
-                color(format!("{temp:>3.0}"), self.col_temp.get(temp))
-            )
         } else {
-            color("err", RED)
+            match self.read_temp() {
+                Err(_) => color("unk", VIOLET),
+                Ok(tc) => {
+                    format!(
+                        "{} C",
+                        color(
+                            format!("{tc:>3.0}"),
+                            color_by_pct_custom(tc, &[40.0, 50.0, 70.0, 90.0])
+                        )
+                    )
+                }
+            }
         };
 
-        // Format load
         let load_str = if self.mode == DisplayMode::Breakdown {
             format!(
                 "u {} k {}",
-                color(format!("{p_user:>3.0}%"), self.col_load.get(p_user)),
-                color(format!("{p_kernel:>3.0}%"), self.col_load.get(p_kernel))
+                color(format!("{p_user:>3.0}%"), color_by_pct(p_user)),
+                color(format!("{p_kernel:>3.0}%"), color_by_pct(p_kernel))
             )
         } else {
             format!(
                 "load {}",
-                color(
-                    format!("{total_usage:>3.0}%"),
-                    self.col_load.get(total_usage),
-                )
+                color(format!("{total_usage:>3.0}%"), color_by_pct(total_usage),)
             )
         };
-        Ok(format!("cpu [{load_str}] [temp {temp_str}]"))
+        format!("cpu [{load_str}] [temp {temp_str}]")
     }
 
     impl_handle_click_rotate_mode!();

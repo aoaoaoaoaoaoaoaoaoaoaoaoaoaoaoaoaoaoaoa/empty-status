@@ -1,5 +1,6 @@
-use crate::core::{ClickEvent, Unit, BLUE, GREEN, GREY, ORANGE, RED, VIOLET, WHITE};
-use crate::display::{color, RangeColorizer, RangeColorizerBuilder};
+use crate::core::{ClickEvent, Unit, GREEN, GREY, ORANGE, RED, VIOLET};
+use crate::display::{color, color_by_pct_custom, COL_USE_HIGH, COL_USE_NORM, COL_USE_VERY_HIGH};
+use crate::util::{Ema, Smoother};
 use crate::{mode_enum, register_unit};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -21,11 +22,8 @@ mode_enum!(Bandwidth, Ping);
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetConfig {
     pub interface: String,
-
-    #[serde_inline_default(0.2)]
-    pub poll_interval: f64,
-
-    #[serde_inline_default(5.0)]
+    // enough to give us snappy updates without being totally thrashy
+    #[serde_inline_default(0.333)]
     pub smoothing_window_sec: f64,
 
     #[serde_inline_default("8.8.8.8".to_string())]
@@ -36,24 +34,29 @@ pub struct NetConfig {
 }
 
 #[derive(Debug)]
+struct RxTxRecord {
+    rx: u64,
+    tx: u64,
+    time: Instant,
+}
+
+#[derive(Debug)]
 pub struct Net {
     cfg: NetConfig,
     mode: DisplayMode,
     // stats
-    rx_hist: VecDeque<u64>, // (bytes, time)
-    tx_hist: VecDeque<u64>,
-    time_hist: VecDeque<Instant>,
-    maxlen: usize,
+    rxtx: Option<RxTxRecord>,
+    rx_ema: Ema<f64>,
+    tx_ema: Ema<f64>,
     // ping
     ping_child: Option<Child>,
     ping_rx: mpsc::UnboundedReceiver<PingOutput>,
     ping_times: VecDeque<f64>,
     ping_received: usize,
     ping_last_seq: u32,
-    ping_med_colorizer: RangeColorizer,
-    ping_mad_colorizer: RangeColorizer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PingOutput {
     // Typical line: "64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=25.6 ms"
@@ -66,31 +69,21 @@ struct PingOutput {
 
 impl Net {
     pub fn from_cfg(cfg: NetConfig) -> Self {
-        let maxlen = ((cfg.smoothing_window_sec / cfg.poll_interval).ceil() as usize).max(2);
         // create a dummy closed rx until ping is started
         // TODO suggested by o3... is this just to avoid Option?
         let (_tx, rx) = mpsc::unbounded_channel();
         let ping_times = VecDeque::with_capacity(cfg.ping_window);
         Self {
-            cfg,
+            cfg: cfg.clone(),
             mode: DisplayMode::Bandwidth,
-            rx_hist: VecDeque::with_capacity(maxlen),
-            tx_hist: VecDeque::with_capacity(maxlen),
-            time_hist: VecDeque::with_capacity(maxlen),
-            maxlen,
+            rxtx: None,
+            rx_ema: Ema::new(cfg.smoothing_window_sec),
+            tx_ema: Ema::new(cfg.smoothing_window_sec),
             ping_child: None,
             ping_rx: rx,
             ping_times,
             ping_received: 0,
             ping_last_seq: 0,
-            ping_med_colorizer: RangeColorizerBuilder::default()
-                .breakpoints(vec![10.0, 20.0, 30.0, 60.0, 120.0])
-                .build()
-                .unwrap(),
-            ping_mad_colorizer: RangeColorizerBuilder::default()
-                .breakpoints(vec![2.0, 5.0, 10.0, 20.0, 50.0])
-                .build()
-                .unwrap(),
         }
     }
     /// Spawn the system ping command and stream rtt values (ms) into an mpsc.
@@ -103,6 +96,8 @@ impl Net {
         let mut child = Command::new("ping")
             .arg("-n") // flood-protect per platform (works on Linux/macOS)
             .arg("-O") // report duplicates/lost early so every pkt has RTT
+            .arg("-I")
+            .arg(&self.cfg.interface)
             .arg(&self.cfg.ping_server)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -110,10 +105,8 @@ impl Net {
             .spawn()
             .context("failed to spawn ping")?;
 
-        let stdout = child
-            .stdout
-            .take()
-            .expect("stdout just configured to piped");
+        let stdout = child.stdout.take().context("could not open ping stdout")?;
+
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
 
@@ -142,7 +135,7 @@ impl Net {
     fn stop_ping(&mut self) {
         if let Some(mut child) = self.ping_child.take() {
             // fire-and-forget kill (ignore errors)
-            let _ = child.kill();
+            std::mem::drop(child.kill());
         }
         self.ping_times.clear();
     }
@@ -161,16 +154,16 @@ impl Net {
 
     fn median_and_mad(samples: &[f64]) -> (f64, f64) {
         let mut v = samples.to_vec();
-        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median = v[v.len() / 2];
         // absolute deviations
         let mut devs: Vec<f64> = v.iter().map(|x| (x - median).abs()).collect();
-        devs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        devs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mad = devs[devs.len() / 2];
         (median, mad)
     }
 
-    fn read_formatted_ping(&mut self) -> Result<String> {
+    fn read_formatted_ping(&mut self) -> String {
         self.refresh_ping_buffer();
         let prefix = format!(
             "net {} [ping {}] ",
@@ -178,31 +171,43 @@ impl Net {
         );
 
         if self.ping_times.len() < 2 {
-            return Ok(prefix + &color("loading", VIOLET));
+            return prefix + &color("loading", VIOLET);
         }
 
         let (med, mad) = Self::median_and_mad(self.ping_times.make_contiguous());
-        let med_str = color(format!("{med:>3.1}"), self.ping_med_colorizer.get(med));
-        let mad_str = color(format!("{mad:>2.1}"), self.ping_mad_colorizer.get(mad));
+        let med_str = color(
+            format!("{med:>3.1}"),
+            color_by_pct_custom(med, &[10.0, 20.0, 30.0, 90.0]),
+        );
+        let mad_str = color(
+            format!("{mad:>2.1}"),
+            color_by_pct_custom(mad, &[2.0, 5.0, 10.0, 30.0]),
+        );
         let loss_pct = 100.0 - 100.0 * self.ping_received as f64 / self.ping_last_seq as f64;
         let loss_str = if loss_pct > 0.0 {
             color(format!("{loss_pct:>3.1}% loss"), ORANGE)
         } else {
             color("no loss", GREEN)
         };
-        Ok(format!(
-            "{prefix}[med {med_str} mad {mad_str} ms] [{loss_str}]"
-        ))
+        format!("{prefix}[med {med_str} mad {mad_str} ms] [{loss_str}]")
     }
 
     // STATS
-    fn read_formatted_stats(&mut self) -> Result<String> {
+    fn read_formatted_stats(&mut self) -> String {
         // Query sysinfo network interface data
         let nets = Networks::new_with_refreshed_list();
         let Some(net) = nets.get(self.cfg.interface.as_str()) else {
             // If interface not found, return gone
-            return Ok(format!("net {} {}", self.cfg.interface, color("gone", RED)));
+            return format!("net {} {}", self.cfg.interface, color("gone", RED));
         };
+        // Check carrier state
+        let carrier_path = format!("/sys/class/net/{}/carrier", self.cfg.interface);
+        if let Ok(carrier) = std::fs::read_to_string(&carrier_path) {
+            if carrier.trim() == "0" {
+                return format!("net {} {}", self.cfg.interface, color("down", RED));
+            }
+        }
+
         let prefix = format!("net {} ", self.cfg.interface);
 
         // always work with totals and our own timestamps
@@ -212,52 +217,44 @@ impl Net {
         let now1 = Instant::now();
         let now = now0 + (now1.duration_since(now0) / 2);
 
-        // Update buffer
-        if self.rx_hist.len() == self.maxlen {
-            self.rx_hist.pop_front();
-            self.tx_hist.pop_front();
-            self.time_hist.pop_front();
-        }
-        self.rx_hist.push_back(rx_bytes);
-        self.tx_hist.push_back(tx_bytes);
-        self.time_hist.push_back(now);
+        let cur_rxtx = RxTxRecord {
+            rx: rx_bytes,
+            tx: tx_bytes,
+            time: now,
+        };
 
-        if self.rx_hist.len() < 2 {
-            return Ok(prefix + &color("loading", VIOLET));
-        }
-        // Calculate Bps in/out (down/up) from buffer
-        let (old_rx, old_tx, old_time) = {
-            let first_ix = 0;
-            (
-                self.rx_hist[first_ix],
-                self.tx_hist[first_ix],
-                self.time_hist[first_ix],
-            )
+        let prev_rxtx = match self.rxtx.take() {
+            Some(prev_rxtx) => prev_rxtx,
+            None => {
+                self.rxtx = Some(cur_rxtx);
+                return prefix + &color("loading", VIOLET);
+            }
         };
-        let (new_rx, new_tx, new_time) = {
-            let last_ix = self.rx_hist.len() - 1;
-            (
-                self.rx_hist[last_ix],
-                self.tx_hist[last_ix],
-                self.time_hist[last_ix],
-            )
-        };
-        let dt = new_time - old_time;
-        let drx = new_rx.saturating_sub(old_rx);
-        let dtx = new_tx.saturating_sub(old_tx);
-        let bps_down = drx as f64 / dt.as_secs_f64();
-        let bps_up = dtx as f64 / dt.as_secs_f64();
+
+        let dt_sec = cur_rxtx.time.duration_since(prev_rxtx.time).as_secs_f64();
+        let drx = cur_rxtx.rx.saturating_sub(prev_rxtx.rx);
+        let dtx = cur_rxtx.tx.saturating_sub(prev_rxtx.tx);
+        let bps_down = drx as f64 / dt_sec;
+        let bps_up = dtx as f64 / dt_sec;
+
+        self.rxtx = Some(cur_rxtx);
+
+        self.rx_ema.feed(bps_down, now);
+        self.tx_ema.feed(bps_up, now);
+
+        let bps_down = self.rx_ema.read().unwrap_or(&0.0);
+        let bps_up = self.tx_ema.read().unwrap_or(&0.0);
 
         // Output formatting logic (ping block on click, bandwidth stats otherwise)
         // For colorizing magnitude
         let mut sfs = [color("B/s", GREY), color("B/s", GREY)];
-        let mut vals = [bps_down, bps_up];
+        let mut vals = [*bps_down, *bps_up];
         // Order: [down, up]
         for ix in 0..2 {
             for (mag, sf) in [
-                (30u64, color("G/s", VIOLET)),
-                (20u64, color("M/s", WHITE)),
-                (10u64, "K/s".to_string()),
+                (30u64, color("G/s", COL_USE_VERY_HIGH)),
+                (20u64, color("M/s", COL_USE_HIGH)),
+                (10u64, color("K/s", COL_USE_NORM)),
             ]
             .iter()
             {
@@ -270,16 +267,16 @@ impl Net {
         }
 
         // Compose bandwidth stats line
-        Ok(format!(
-            "{}[u {:6.1} {:>3}] [d {:6.1} {:>3}]",
+        format!(
+            "{}[u {:>4.0} {:>3}] [d {:4.0} {:>3}]",
             prefix, vals[1], sfs[1], vals[0], sfs[0],
-        ))
+        )
     }
 }
 
 #[async_trait]
 impl Unit for Net {
-    async fn read_formatted(&mut self) -> Result<String> {
+    async fn read_formatted(&mut self) -> String {
         match self.mode {
             DisplayMode::Bandwidth => self.read_formatted_stats(),
             DisplayMode::Ping => self.read_formatted_ping(),

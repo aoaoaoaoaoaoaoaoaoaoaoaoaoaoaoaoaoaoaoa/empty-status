@@ -1,12 +1,9 @@
 use std::path::Path;
 
+use crate::display::{color_by_pct, color_by_pct_custom};
 use crate::mode_enum;
 use crate::util::RotateEnum;
-use crate::{
-    core::{Unit, GREEN},
-    display::{color, RangeColorizer, RangeColorizerBuilder},
-    impl_handle_click_rotate_mode, register_unit,
-};
+use crate::{core::Unit, display::color, impl_handle_click_rotate_mode, register_unit};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -19,10 +16,9 @@ pub struct MemConfig {}
 
 #[derive(Debug)]
 pub struct Mem {
+    #[allow(dead_code)]
     cfg: MemConfig,
     mode: DisplayMode,
-    col_load_tot: RangeColorizer,
-    col_load_worst: RangeColorizer,
 }
 
 impl Mem {
@@ -30,14 +26,9 @@ impl Mem {
         Self {
             cfg,
             mode: DisplayMode::Totals,
-            col_load_tot: RangeColorizerBuilder::default().build().unwrap(),
-            col_load_worst: RangeColorizerBuilder::default()
-                .breakpoints(vec![5.0, 10.0, 20.0, 50.0])
-                .build()
-                .unwrap(),
         }
     }
-    fn read_formatted_totals(&self) -> Result<String> {
+    fn read_formatted_totals(&self) -> String {
         let mut sys = System::new();
         sys.refresh_memory();
 
@@ -49,16 +40,14 @@ impl Mem {
         let used_gib = used_bytes as f64 / (1 << 30) as f64; // Convert bytes to GiB
         let used_percent = used_frac * 100.0;
 
-        let col = self.col_load_tot.get(used_percent);
-        let formatted_gib = color(format!("{used_gib:>2.1}"), col);
-        let formatted_percent = color(format!("{used_percent:>2.0}"), col);
+        let col = color_by_pct(used_percent);
+        let formatted_gib = color(format!("{used_gib:>2.1}"), &col);
+        let formatted_percent = color(format!("{used_percent:>2.0}"), &col);
 
-        Ok(format!(
-            "mem [used {formatted_gib} GiB ({formatted_percent}%)]",
-        ))
+        format!("mem [used {formatted_gib} GiB ({formatted_percent}%)]",)
     }
 
-    fn read_formatted_worst_rss(&self) -> Result<String> {
+    fn read_formatted_worst_rss(&self) -> String {
         let mut sys = System::new();
         sys.refresh_processes(ProcessesToUpdate::All, true);
         sys.refresh_memory();
@@ -82,15 +71,15 @@ impl Mem {
 
         let max_rss_gib = max_rss_bytes as f64 / (1 << 30) as f64;
         let max_rss_rel = max_rss_gib / sys.total_memory() as f64 * 100.0;
-        let col = self.col_load_worst.get(max_rss_rel);
+        let col = color_by_pct_custom(max_rss_rel, &[5.0, 10.0, 20.0, 50.0]);
         let max_rss_str = color(format!("{max_rss_gib:>2.3}"), col);
-        Ok(format!("mem [worst {max_name}: {max_rss_str} GiB rss]"))
+        format!("mem [worst {max_name}: {max_rss_str} GiB rss]")
     }
 }
 
 #[async_trait]
 impl Unit for Mem {
-    async fn read_formatted(&mut self) -> Result<String> {
+    async fn read_formatted(&mut self) -> String {
         match self.mode {
             DisplayMode::Totals => self.read_formatted_totals(),
             DisplayMode::WorstProcess => self.read_formatted_worst_rss(),

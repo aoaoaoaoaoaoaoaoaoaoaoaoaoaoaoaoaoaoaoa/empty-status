@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde_inline_default::serde_inline_default;
 use std::{fs, path::PathBuf};
 use toml::Value;
 use tracing::{debug, error, info, warn};
@@ -29,15 +30,11 @@ struct RawUnitConfig {
     rest: Value,
 }
 
+#[serde_inline_default]
 #[derive(Deserialize, Debug, Clone)]
 pub struct SchedulingCfg {
+    #[serde_inline_default(0.333)]
     pub poll_interval: f64,
-}
-
-impl Default for SchedulingCfg {
-    fn default() -> Self {
-        Self { poll_interval: 1.0 }
-    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -72,7 +69,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
 
     let mut wrappers = Vec::with_capacity(raw.units.len());
 
-    for ruc in raw.units {
+    for (handle, ruc) in raw.units.iter().enumerate() {
         let factory = match registry::iter().find(|f| f.kind == ruc.kind) {
             Some(factory) => factory,
             None => {
@@ -93,15 +90,21 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
             }
         };
 
-        let sched = ruc
-            .rest
-            .clone()
-            .try_into::<SchedulingCfg>()
-            .unwrap_or_default();
+       let sched = match ruc.rest.clone().try_into::<SchedulingCfg>() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                error!(
+                    "Failed to parse scheduling config for unit '{}': {e}",
+                    ruc.kind
+                );
+                continue;
+            }
+        };
 
         wrappers.push(UnitWrapper {
             unit: unit_obj,
             cfg: sched,
+            handle,
         });
     }
 

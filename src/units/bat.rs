@@ -1,5 +1,5 @@
 use crate::core::{Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
-use crate::display::{color, RangeColorizer, RangeColorizerBuilder};
+use crate::display::{color, color_by_pct};
 use crate::util::RotateEnum;
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 use anyhow::Result;
@@ -53,14 +53,12 @@ pub struct BatConfig {
 
 #[derive(Debug)]
 pub struct Bat {
-    cfg: BatConfig,
     mode: DisplayMode,
     cur_status: BatStatus,
     min_rem_smooth: Option<f64>,
     p_hist: VecDeque<f64>,
     p_hist_maxlen: usize,
     uevent_path: String,
-    pct_colorizer: RangeColorizer,
 }
 
 impl Bat {
@@ -69,17 +67,12 @@ impl Bat {
         let uevent_path = format!("/sys/class/power_supply/BAT{}/uevent", cfg.bat_id);
         let p_hist_maxlen = (10.0 / cfg.poll_interval).ceil() as usize;
         Self {
-            cfg,
             mode: DisplayMode::CurCapacity,
             min_rem_smooth: None,
             cur_status: BatStatus::Unknown,
             p_hist: VecDeque::with_capacity(p_hist_maxlen),
             p_hist_maxlen,
             uevent_path,
-            pct_colorizer: RangeColorizerBuilder::default()
-                .reverse(true)
-                .build()
-                .unwrap(),
         }
     }
 
@@ -184,7 +177,7 @@ impl BatteryInfo {
 
 #[async_trait]
 impl Unit for Bat {
-    async fn read_formatted(&mut self) -> Result<String> {
+    async fn read_formatted(&mut self) -> String {
         let mut missing = false;
         let uevent = match self.parse_uevent() {
             Ok(map) => map,
@@ -195,14 +188,14 @@ impl Unit for Bat {
         };
 
         if missing || uevent.get("present").map(|v| v == "0").unwrap_or(false) {
-            return Ok(color("No battery", RED));
+            return color("No battery", RED);
         }
 
         let bi =
             match BatteryInfo::from_charge(&uevent).or_else(|| BatteryInfo::from_energy(&uevent)) {
                 Some(bi) => bi,
                 None => {
-                    return Ok(color("invalid data", RED));
+                    return color("invalid data", RED);
                 }
             };
 
@@ -222,7 +215,7 @@ impl Unit for Bat {
         } else {
             100.0 * bi.charged_frac
         };
-        let pct_str = color(format!("{pct:3.0}"), self.pct_colorizer.get(pct));
+        let pct_str = color(format!("{pct:3.0}"), color_by_pct(pct));
 
         // Determine battery state
         let mut bs = BatStatus::from_uevent(&uevent);
@@ -274,18 +267,18 @@ impl Unit for Bat {
                                      // fallthrough
             };
 
-            Ok(format!(
+            format!(
                 "bat {}{}%{} [{} rem, {}]",
                 brackets[0],
                 pct_str,
                 brackets[1],
                 rem_string,
                 bs.state_string()
-            ))
+            )
         } else {
             let voltage = bi.voltage.map_or("--".to_string(), |v| format!("{v:.2} V"));
             let current = bi.current.map_or("--".to_string(), |c| format!("{c:.2} A"));
-            Ok(format!("({voltage} | {current})"))
+            format!("({voltage} | {current})")
         }
     }
     impl_handle_click_rotate_mode!();

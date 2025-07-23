@@ -17,8 +17,8 @@ macro_rules! register_unit {
     // $ty: the full path to your Unit type
     // $cfg: the full path to your Config type
     ($ty:path, $cfg:path) => {
+        use $crate::registry::UnitFactory;
         inventory::submit! {
-            use $crate::registry::UnitFactory;
             UnitFactory {
                 kind: stringify!($ty),
                 build: |val: toml::Value| -> Result<Box<dyn $crate::core::Unit>> {

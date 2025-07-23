@@ -1,8 +1,9 @@
+use crate::display::color_by_pct_custom;
 use crate::mode_enum;
 use crate::util::RotateEnum;
 use crate::{
     core::Unit,
-    display::{color, format_duration, RangeColorizer, RangeColorizerBuilder},
+    display::{color, format_duration},
     impl_handle_click_rotate_mode, register_unit,
 };
 use anyhow::Result;
@@ -25,47 +26,44 @@ pub struct TimeConfig {
 pub struct Time {
     cfg: TimeConfig,
     mode: DisplayMode,
-    colorizer: RangeColorizer,
+    uptime_breakpints: [f64; 4],
 }
 
 impl Time {
     pub fn from_cfg(cfg: TimeConfig) -> Self {
         let ncpu = num_cpus::get() as f64;
-        let load_color_scale = RangeColorizerBuilder::default()
-            .breakpoints(vec![ncpu * 0.1, ncpu * 0.25, ncpu * 0.50, ncpu * 0.75])
-            .build()
-            .unwrap();
-
         Self {
             cfg,
             mode: DisplayMode::DateTime,
-            colorizer: load_color_scale,
+            uptime_breakpints: [ncpu * 0.1, ncpu * 0.25, ncpu * 0.50, ncpu * 0.75],
         }
     }
 
-    fn read_formatted_datetime(&self) -> Result<String> {
-        let current_time = Local::now().format(&self.cfg.format).to_string();
-        Ok(current_time)
+    fn read_formatted_datetime(&self) -> String {
+        Local::now().format(&self.cfg.format).to_string()
     }
 
-    fn read_formatted_uptime(&self) -> Result<String> {
+    fn read_formatted_uptime(&self) -> String {
         let uptime = System::uptime();
         let load_avg = System::load_average();
         let ut_s = format_duration(uptime as f64);
         let mut load_strings = Vec::new();
         for data in [&load_avg.one, &load_avg.five, &load_avg.fifteen] {
-            load_strings.push(color(format!("{data:>3.2}"), self.colorizer.get(*data)));
+            load_strings.push(color(
+                format!("{data:>3.2}"),
+                color_by_pct_custom(*data, &self.uptime_breakpints),
+            ));
         }
-        Ok(format!(
+        format!(
             "uptime [{ut_s}] load [{}/{}/{}]",
             load_strings[0], load_strings[1], load_strings[2]
-        ))
+        )
     }
 }
 
 #[async_trait]
 impl Unit for Time {
-    async fn read_formatted(&mut self) -> Result<String> {
+    async fn read_formatted(&mut self) -> String {
         match self.mode {
             DisplayMode::DateTime => self.read_formatted_datetime(),
             DisplayMode::Uptime => self.read_formatted_uptime(),

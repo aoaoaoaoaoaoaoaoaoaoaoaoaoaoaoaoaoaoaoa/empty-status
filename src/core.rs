@@ -4,11 +4,12 @@ use serde::{Deserialize, Serialize};
 use std::any::type_name;
 use std::collections::HashSet;
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::sync::broadcast::{channel, Sender};
-use tokio::time::{interval, sleep};
+use tokio::sync::Mutex;
+use tokio::time::interval;
 use tokio::{select, spawn};
 use tracing::warn;
 
@@ -23,7 +24,7 @@ pub const GREY: &str = "#969896";
 // pub const LIGHT_GREY: &str = "#B4B7B4";
 // pub const LIGHTER_GREY: &str = "#C5C8C6";
 // pub const NEAR_WHITE: &str = "#E0E0E0";
-pub const WHITE: &str = "#FFFFFF";
+// pub const WHITE: &str = "#FFFFFF";
 pub const RED: &str = "#CC6666";
 pub const ORANGE: &str = "#DE935F";
 pub const YELLOW: &str = "#F0C674";
@@ -82,34 +83,34 @@ pub trait Unit: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &'static str {
         type_name::<Self>()
     }
-
-    // Main method to read and format unit's data
-    async fn read_formatted(&mut self) -> Result<String>;
-
-    // Handle click events
+    // we make this an infallible string since units are, in essence, already
+    // mixing data and error information in the display band. a formal error
+    // path would be artificial make-work when the unit can and should just format
+    // its own error message prettily.
+    async fn read_formatted(&mut self) -> String;
     fn handle_click(&mut self, _click: ClickEvent);
 }
 
 pub struct UnitWrapper {
     pub unit: Box<dyn Unit>,
     pub cfg: SchedulingCfg,
+    pub handle: usize,
 }
 
 pub struct EmptyStatus {
     wrappers: Vec<UnitWrapper>,
     cfg: GlobalConfig,
-    unit_outputs: Arc<Mutex<std::collections::HashMap<&'static str, OutputChunk>>>,
+    unit_outputs: Arc<Mutex<std::collections::HashMap<usize, OutputChunk>>>,
     click_tx: Sender<ClickEvent>,
 }
 
 impl EmptyStatus {
     pub fn new(units: Vec<UnitWrapper>, cfg: GlobalConfig) -> Result<Self> {
         // Check for duplicate unit names
-        let mut names = HashSet::new();
+        let mut handles = HashSet::<usize>::new();
         for su in &units {
-            let name = su.unit.name();
-            if !names.insert(name) {
-                return Err(anyhow!("Duplicate unit name: {name}"));
+            if !handles.insert(su.handle) {
+                return Err(anyhow!("Duplicate unit handle: {}", su.handle));
             }
         }
 
@@ -122,7 +123,7 @@ impl EmptyStatus {
                 color(format!("unit '{name}' loading"), VIOLET),
                 cfg.padding,
             );
-            unit_outputs.insert(name, chunk);
+            unit_outputs.insert(su.handle, chunk);
         }
 
         let (click_tx, _) = channel::<ClickEvent>(16);
@@ -147,7 +148,7 @@ impl EmptyStatus {
         } = self;
 
         // Precompute order of names for the writer task (since units are moved away).
-        let unit_names: Vec<&'static str> = wrappers.iter().map(|u| u.unit.name()).collect();
+        let handles: Vec<usize> = wrappers.iter().map(|u| u.handle).collect();
 
         spawn(read_clicks_task(click_tx.clone()));
 
@@ -157,8 +158,12 @@ impl EmptyStatus {
             let outputs = Arc::clone(&unit_outputs);
             let mut rx = click_tx.subscribe();
 
-            let mut ticker = interval(Duration::from_secs_f64(uwrp.cfg.poll_interval));
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut ticker = interval(Duration::from_secs_f64(
+                // TODO "min_sleep" is unintuitive. the idea is to have a per-system throttle to
+                // e.g. not kill the battery by accident but I suspect there are better names/ways
+                uwrp.cfg.poll_interval.max(cfg.min_sleep),
+            ));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             ticker.tick().await; // Initial tick to avoid delay
 
             spawn(async move {
@@ -175,19 +180,10 @@ impl EmptyStatus {
                         _ = ticker.tick() => true
                     };
                     if do_refresh {
-                        let result = match uwrp.unit.read_formatted().await {
-                            Err(e) => color(format!("{unit_name} failed: {e}"), BROWN),
-                            Ok(formatted) => formatted,
-                        };
-
-                        let mut guard = outputs.lock().unwrap();
-                        guard.insert(unit_name, process_chunk(unit_name, result, cfg.padding));
+                        let result = uwrp.unit.read_formatted().await;
+                        let mut guard = outputs.lock().await;
+                        guard.insert(uwrp.handle, process_chunk(unit_name, result, cfg.padding));
                     }
-
-                    sleep(Duration::from_millis(
-                        (uwrp.cfg.poll_interval * 250.0) as u64,
-                    ))
-                    .await;
                 }
             });
         }
@@ -195,14 +191,14 @@ impl EmptyStatus {
         // Spawn writer (no self reference; use unit_names + unit_outputs)
         {
             let outputs = Arc::clone(&unit_outputs);
-            let unit_names = unit_names.clone();
+            let handles = handles.clone();
             spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs_f64(cfg.min_sleep));
                 loop {
                     interval.tick().await;
-                    let guard = outputs.lock().unwrap();
-                    let mut chunks = Vec::with_capacity(unit_names.len());
-                    for name in &unit_names {
+                    let guard = outputs.lock().await;
+                    let mut chunks = Vec::with_capacity(handles.len());
+                    for name in &handles {
                         if let Some(chunk) = guard.get(name) {
                             chunks.push(serde_json::to_string(chunk).unwrap_or_default());
                         }
@@ -216,9 +212,9 @@ impl EmptyStatus {
 
         // Initial line
         {
-            let guard = unit_outputs.lock().unwrap();
-            let mut chunks = Vec::with_capacity(unit_names.len());
-            for name in &unit_names {
+            let guard = unit_outputs.lock().await;
+            let mut chunks = Vec::with_capacity(handles.len());
+            for name in &handles {
                 if let Some(chunk) = guard.get(name) {
                     chunks.push(serde_json::to_string(chunk).unwrap_or_default());
                 }

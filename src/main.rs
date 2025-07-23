@@ -27,7 +27,7 @@ fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
     let (non_blocking_appender, guard) = non_blocking(file_appender);
 
     let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
+        .with_default_directive(LevelFilter::DEBUG.into())
         .from_env_lossy();
     fmt()
         .with_env_filter(filter)
@@ -40,7 +40,7 @@ fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let _guard = init_file_logger();
-    info!("starting empty-status");
+    info!("Starting empty-status!");
     let status = load_status_from_cfg()?;
     status.run().await;
     Ok(())
