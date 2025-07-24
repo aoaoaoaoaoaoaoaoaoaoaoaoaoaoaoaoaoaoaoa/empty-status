@@ -70,7 +70,7 @@ impl Mem {
         }
 
         let max_rss_gib = max_rss_bytes as f64 / (1 << 30) as f64;
-        let max_rss_rel = max_rss_gib / sys.total_memory() as f64 * 100.0;
+        let max_rss_rel = max_rss_bytes as f64 / sys.total_memory() as f64 * 100.0;
         let col = color_by_pct_custom(max_rss_rel, &[5.0, 10.0, 20.0, 50.0]);
         let max_rss_str = color(format!("{max_rss_gib:>2.3}"), col);
         format!("mem [worst {max_name}: {max_rss_str} GiB rss]")
