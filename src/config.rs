@@ -90,7 +90,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
             }
         };
 
-       let sched = match ruc.rest.clone().try_into::<SchedulingCfg>() {
+        let sched = match ruc.rest.clone().try_into::<SchedulingCfg>() {
             Ok(cfg) => cfg,
             Err(e) => {
                 error!(
@@ -113,15 +113,14 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
 }
 
 fn sample_config() -> &'static str {
-    r#"min_sleep = 0.1
+    r#"# each unit defines its own polling interval. to save resources you can define a global floor here
+min_sleep = 0.15
 padding = 1
 
 # units will appear on the bar in the same order as they are defined here
 # topmost is rightmost
 [[units]]
 type = "Time"
-poll = 0.7
 format = "%a %b %d %Y - %H:%M"
-uptime_mode = false
 "#
 }

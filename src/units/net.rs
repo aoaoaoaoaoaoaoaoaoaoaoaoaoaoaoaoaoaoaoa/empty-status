@@ -282,7 +282,6 @@ impl Unit for Net {
             DisplayMode::Ping => self.read_formatted_ping(),
         }
     }
-
     fn handle_click(&mut self, _click: ClickEvent) {
         self.mode = match self.mode {
             DisplayMode::Bandwidth => {

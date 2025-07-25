@@ -136,7 +136,6 @@ impl EmptyStatus {
         })
     }
 
-    // Main execution loop
     pub async fn run(self) {
         println!("{{\"version\":1,\"click_events\":true}}\n[");
 
@@ -147,12 +146,10 @@ impl EmptyStatus {
             click_tx,
         } = self;
 
-        // Precompute order of names for the writer task (since units are moved away).
         let handles: Vec<usize> = wrappers.iter().map(|u| u.handle).collect();
 
         spawn(read_clicks_task(click_tx.clone()));
 
-        // Spawn one task per unit, moving each unit in.
         for mut uwrp in wrappers.into_iter() {
             let unit_name = uwrp.unit.name();
             let outputs = Arc::clone(&unit_outputs);
@@ -164,7 +161,7 @@ impl EmptyStatus {
                 uwrp.cfg.poll_interval.max(cfg.min_sleep),
             ));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            ticker.tick().await; // Initial tick to avoid delay
+            ticker.tick().await;
 
             spawn(async move {
                 loop {
@@ -172,9 +169,9 @@ impl EmptyStatus {
                         Ok(click) = rx.recv() => {
                             if click.name == unit_name {
                                 uwrp.unit.handle_click(click);
-                                true // Refresh on click
+                                true
                             } else {
-                                false // Ignore clicks for other units
+                                false
                             }
                         },
                         _ = ticker.tick() => true
@@ -187,8 +184,6 @@ impl EmptyStatus {
                 }
             });
         }
-
-        // Spawn writer (no self reference; use unit_names + unit_outputs)
         {
             let outputs = Arc::clone(&unit_outputs);
             let handles = handles.clone();
@@ -209,8 +204,6 @@ impl EmptyStatus {
                 }
             });
         }
-
-        // Initial line
         {
             let guard = unit_outputs.lock().await;
             let mut chunks = Vec::with_capacity(handles.len());
@@ -221,8 +214,6 @@ impl EmptyStatus {
             }
             println!("[{}],", chunks.join(","));
         }
-
-        // Park forever (or return JoinHandles instead)
         std::future::pending::<()>().await;
     }
 }
