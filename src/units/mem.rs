@@ -2,9 +2,7 @@ use std::path::Path;
 
 use crate::display::{color_by_pct, color_by_pct_custom};
 use crate::mode_enum;
-use crate::util::RotateEnum;
 use crate::{core::Unit, display::color, impl_handle_click_rotate_mode, register_unit};
-use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use sysinfo::{ProcessesToUpdate, System};
@@ -41,7 +39,7 @@ impl Mem {
         let used_percent = used_frac * 100.0;
 
         let col = color_by_pct(used_percent);
-        let formatted_gib = color(format!("{used_gib:>2.1}"), &col);
+        let formatted_gib = color(format!("{used_gib:>4.1}"), &col);
         let formatted_percent = color(format!("{used_percent:>2.0}"), &col);
 
         format!("mem [used {formatted_gib} GiB ({formatted_percent}%)]",)

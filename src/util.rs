@@ -36,7 +36,8 @@ macro_rules! impl_handle_click_nop {
 macro_rules! impl_handle_click_rotate_mode {
     () => {
         fn handle_click(&mut self, _click: $crate::core::ClickEvent) {
-            self.mode = self.mode.next();
+            // self.mode = self.mode.next();
+            self.mode = $crate::util::RotateEnum::next(self.mode);
         }
     };
 }

@@ -1,6 +1,6 @@
-use crate::core::{BLUE, GREEN, ORANGE, RED, YELLOW};
+use crate::core::{CYAN, GREEN, ORANGE, RED, YELLOW};
 
-pub const COL_USE_COOL: &str = BLUE;
+pub const COL_USE_COOL: &str = CYAN;
 pub const COL_USE_NORM: &str = GREEN;
 pub const COL_USE_HIGH: &str = YELLOW;
 pub const COL_USE_VERY_HIGH: &str = ORANGE;

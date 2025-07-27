@@ -1,6 +1,6 @@
 use crate::core::{Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
 use crate::display::{color, color_by_pct_rev};
-use crate::util::{Ema, RotateEnum, Smoother};
+use crate::util::{Ema, Smoother};
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -40,8 +40,8 @@ impl BatStatus {
         match self {
             Self::Discharging => color("DIS", ORANGE),
             Self::Charging => color("CHR", GREEN),
-            Self::Full => color("FUL", BLUE),
-            Self::Balanced => color("BAL", CYAN),
+            Self::Full => color("FUL", CYAN),
+            Self::Balanced => color("BAL", BLUE),
             _ => color("UNK", VIOLET),
         }
     }

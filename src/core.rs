@@ -17,14 +17,8 @@ use crate::config::{GlobalConfig, SchedulingCfg};
 use crate::display::color;
 
 // Color definitions from the base16 tomorrow theme
-// pub const NEAR_BLACK: &str = "#1D1F21";
-// pub const DARKER_GREY: &str = "#282A2E";
 pub const DARK_GREY: &str = "#373B41";
 pub const GREY: &str = "#969896";
-// pub const LIGHT_GREY: &str = "#B4B7B4";
-// pub const LIGHTER_GREY: &str = "#C5C8C6";
-// pub const NEAR_WHITE: &str = "#E0E0E0";
-// pub const WHITE: &str = "#FFFFFF";
 pub const RED: &str = "#CC6666";
 pub const ORANGE: &str = "#DE935F";
 pub const YELLOW: &str = "#F0C674";

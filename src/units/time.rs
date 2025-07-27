@@ -1,12 +1,10 @@
 use crate::display::color_by_pct_custom;
 use crate::mode_enum;
-use crate::util::RotateEnum;
 use crate::{
     core::Unit,
     display::{color, format_duration},
     impl_handle_click_rotate_mode, register_unit,
 };
-use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Local;
 use serde::Deserialize;

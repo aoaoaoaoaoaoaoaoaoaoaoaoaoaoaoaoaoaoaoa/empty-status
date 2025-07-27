@@ -27,7 +27,7 @@ fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
     let (non_blocking_appender, guard) = non_blocking(file_appender);
 
     let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::DEBUG.into())
+        .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
     fmt()
         .with_env_filter(filter)

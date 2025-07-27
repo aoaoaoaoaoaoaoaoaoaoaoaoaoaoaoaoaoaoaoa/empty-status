@@ -4,3 +4,4 @@ pub mod disk;
 pub mod mem;
 pub mod net;
 pub mod time;
+pub mod wifi;
