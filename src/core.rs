@@ -106,7 +106,6 @@ pub struct EmptyStatus {
 
 impl EmptyStatus {
     pub fn new(units: Vec<UnitWrapper>, cfg: GlobalConfig) -> Result<Self> {
-        // Check for duplicate unit names
         let mut handles = HashSet::<usize>::new();
         for su in &units {
             if !handles.insert(su.handle) {
@@ -114,7 +113,6 @@ impl EmptyStatus {
             }
         }
 
-        // Initialize unit outputs
         let mut unit_outputs = std::collections::HashMap::new();
         for su in &units {
             let name = su.unit.name();
@@ -156,8 +154,6 @@ impl EmptyStatus {
             let mut rx = click_tx.subscribe();
 
             let mut ticker = interval(Duration::from_secs_f64(
-                // TODO "min_sleep" is unintuitive. the idea is to have a per-system throttle to
-                // e.g. not kill the battery by accident but I suspect there are better names/ways
                 uwrp.cfg.poll_interval.max(cfg.min_polling_interval),
             ));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -218,7 +214,6 @@ impl EmptyStatus {
         std::future::pending::<()>().await;
     }
 }
-// Process the unit's output with the padding
 fn process_chunk(name: &str, text: String, padding: i32) -> OutputChunk {
     let mut chunk = OutputChunk::new(name, text);
 

@@ -32,7 +32,6 @@ const KNOWN_CPU_HWMON_NAMES: &[&str] = &[
 
 impl Cpu {
     pub fn from_cfg(_cfg: CpuConfig) -> Self {
-        // Initial CPU times
         let (total, user, kernel) = Self::read_cpu_times().unwrap_or((0, 0, 0));
 
         Self {
@@ -84,7 +83,6 @@ impl Cpu {
 #[async_trait]
 impl Unit for Cpu {
     async fn read_formatted(&mut self) -> String {
-        // Read CPU times
         let (total, user, kernel) = match Self::read_cpu_times() {
             Ok(times) => times,
             Err(_) => {
@@ -96,12 +94,10 @@ impl Unit for Cpu {
         let d_user = user.saturating_sub(self.prev_user) as f64;
         let d_kernel = kernel.saturating_sub(self.prev_kernel) as f64;
 
-        // Update previous values
         self.prev_total = total;
         self.prev_user = user;
         self.prev_kernel = kernel;
 
-        // Calculate usage fractions
         let p_user = if d_total > 0.0 { d_user / d_total } else { 0.0 };
         let p_kernel = if d_total > 0.0 {
             d_kernel / d_total

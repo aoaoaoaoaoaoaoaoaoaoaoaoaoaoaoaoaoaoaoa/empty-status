@@ -37,7 +37,7 @@ impl Mem {
 
         let used_frac = used_bytes as f64 / total_bytes as f64;
 
-        let used_gib = used_bytes as f64 / (1 << 30) as f64; // Convert bytes to GiB
+        let used_gib = used_bytes as f64 / (1 << 30) as f64;
         let used_percent = used_frac * 100.0;
 
         let col = color_by_pct(used_percent);
@@ -51,7 +51,6 @@ impl Mem {
         let mut sys = System::new();
         sys.refresh_processes(ProcessesToUpdate::All, true);
         sys.refresh_memory();
-        // aggregate by simple stem, removing flags etc.
         let mut max_name = "";
         let mut max_rss_bytes = 0;
 

@@ -145,7 +145,6 @@ impl BatteryInfo {
         })
     }
 
-    /// Construct from `energy_now`, `energy_full`, etc.
     pub fn from_energy(u: &HashMap<String, String>) -> Option<Self> {
         let energy_now = u.get("energy_now")?.parse::<i64>().ok()?;
         let energy_full = u.get("energy_full")?.parse::<i64>().ok()?;
@@ -207,19 +206,16 @@ impl Unit for Bat {
 
         let pct_str = color(format!("{pct:3.0}"), color_by_pct_rev(pct));
 
-        // Determine battery state
         let mut bs = BatStatus::from_uevent(&uevent);
         if bs == BatStatus::Other && p_smooth == 0.0 {
             bs = BatStatus::Balanced;
         }
 
-        // Reset smoothing if status changes
         if bs != self.cur_status {
             self.cur_status = bs;
             self.power_ema = Ema::new(self.cfg.power_smoothing_sec);
         }
 
-        // Estimate time remaining in seconds
         let sec_rem: Option<f64> = match bs {
             BatStatus::Charging => {
                 if p_smooth > 0.0 {

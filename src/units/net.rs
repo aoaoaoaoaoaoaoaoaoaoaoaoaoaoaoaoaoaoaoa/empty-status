@@ -69,8 +69,6 @@ struct PingOutput {
 
 impl Net {
     pub fn from_cfg(cfg: NetConfig) -> Self {
-        // create a dummy closed rx until ping is started
-        // TODO suggested by o3... is this just to avoid Option?
         let (_tx, rx) = mpsc::unbounded_channel();
         let ping_times = VecDeque::with_capacity(cfg.ping_window);
         Self {
@@ -86,9 +84,7 @@ impl Net {
             cfg,
         }
     }
-    /// Spawn the system ping command and stream rtt values (ms) into an mpsc.
     fn start_ping(&mut self) -> Result<()> {
-        // If already running, nothing to do
         if self.ping_child.is_some() {
             return Ok(());
         }
@@ -131,16 +127,13 @@ impl Net {
         Ok(())
     }
 
-    /// Stop and clean up the running ping command, if any.
     fn stop_ping(&mut self) {
         if let Some(mut child) = self.ping_child.take() {
-            // fire-and-forget kill (ignore errors)
             std::mem::drop(child.kill());
         }
         self.ping_times.clear();
     }
 
-    /// Drain any new rtt samples from the mpsc into our circular buffer.
     fn refresh_ping_buffer(&mut self) {
         while let Ok(po) = self.ping_rx.try_recv() {
             if self.ping_times.len() == self.cfg.ping_window {
@@ -194,13 +187,10 @@ impl Net {
 
     // STATS
     fn read_formatted_stats(&mut self) -> String {
-        // Query sysinfo network interface data
         let nets = Networks::new_with_refreshed_list();
         let Some(net) = nets.get(self.cfg.interface.as_str()) else {
-            // If interface not found, return gone
             return format!("net {} {}", self.cfg.interface, color("gone", RED));
         };
-        // Check carrier state
         let carrier_path = format!("/sys/class/net/{}/carrier", self.cfg.interface);
         if let Ok(carrier) = std::fs::read_to_string(&carrier_path) {
             if carrier.trim() == "0" {
@@ -210,7 +200,6 @@ impl Net {
 
         let prefix = format!("net {} ", self.cfg.interface);
 
-        // always work with totals and our own timestamps
         let now0 = Instant::now();
         let rx_bytes = net.total_received();
         let tx_bytes = net.total_transmitted();
@@ -245,8 +234,6 @@ impl Net {
         let bps_down = self.rx_ema.read().unwrap_or(&0.0);
         let bps_up = self.tx_ema.read().unwrap_or(&0.0);
 
-        // Output formatting logic (ping block on click, bandwidth stats otherwise)
-        // For colorizing magnitude
         let mut sfs = [color("B/s", GREY), color("B/s", GREY)];
         let mut vals = [*bps_down, *bps_up];
         // Order: [down, up]
@@ -266,7 +253,6 @@ impl Net {
             }
         }
 
-        // Compose bandwidth stats line
         format!(
             "{}[u {:>4.0} {:>3}] [d {:4.0} {:>3}]",
             prefix, vals[1], sfs[1], vals[0], sfs[0],

@@ -139,11 +139,6 @@ impl Unit for Disk {
         let bps_write = self.write_ema.feed_and_read(bps_write, now).unwrap_or(&0.0);
 
         let context = format!("disk {} [{{}}]", self.cfg.disk);
-
-        // let threshs = [
-        //     1.0, 1024.0, 4096.0, 16384.0, 65536.0, 262144.0, 1048576.0, 4194304.0, 16777216.0,
-        // ];
-
         let r_bar = BARS[self
             .read_threshs
             .iter()

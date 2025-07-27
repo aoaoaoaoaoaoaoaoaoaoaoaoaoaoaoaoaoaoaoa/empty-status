@@ -87,7 +87,6 @@ impl<T> Ema<T>
 where
     T: Add<T, Output = T> + Mul<f64, Output = T>,
 {
-    /// Create a new EMA smoother with time constant `lambda_sec` (in seconds).
     pub fn new(lambda_sec: f64) -> Self {
         Ema {
             lambda_sec,

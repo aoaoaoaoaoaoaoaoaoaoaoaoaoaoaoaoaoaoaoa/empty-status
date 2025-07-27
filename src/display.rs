@@ -1,6 +1,5 @@
 use crate::core::{BLUE, GREEN, ORANGE, RED, YELLOW};
 
-// Get appropriate color based on value and thresholds
 pub const COL_USE_COOL: &str = BLUE;
 pub const COL_USE_NORM: &str = GREEN;
 pub const COL_USE_HIGH: &str = YELLOW;
@@ -45,12 +44,10 @@ pub fn color_by_pct_rev(value: f64) -> String {
     )
 }
 
-// Add color to text using pango markup
 pub fn color<S: AsRef<str>, T: AsRef<str>>(text: S, color: T) -> String {
     pangofy(text.as_ref(), Some(color.as_ref()), None)
 }
 
-// Create a pango formatted string
 pub fn pangofy(text: &str, color: Option<&str>, background: Option<&str>) -> String {
     let mut attrs = Vec::new();
 
@@ -70,7 +67,6 @@ pub fn pangofy(text: &str, color: Option<&str>, background: Option<&str>) -> Str
     }
 }
 
-// Format a value, automatically choosing a time unit
 pub fn format_duration(seconds: f64) -> String {
     if seconds < 60.0 {
         // Handle small values
