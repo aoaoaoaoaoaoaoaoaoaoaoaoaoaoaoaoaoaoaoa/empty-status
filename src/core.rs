@@ -158,7 +158,7 @@ impl EmptyStatus {
             let mut ticker = interval(Duration::from_secs_f64(
                 // TODO "min_sleep" is unintuitive. the idea is to have a per-system throttle to
                 // e.g. not kill the battery by accident but I suspect there are better names/ways
-                uwrp.cfg.poll_interval.max(cfg.min_sleep),
+                uwrp.cfg.poll_interval.max(cfg.min_polling_interval),
             ));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             ticker.tick().await;
@@ -188,7 +188,8 @@ impl EmptyStatus {
             let outputs = Arc::clone(&unit_outputs);
             let handles = handles.clone();
             spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs_f64(cfg.min_sleep));
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs_f64(cfg.min_polling_interval));
                 loop {
                     interval.tick().await;
                     let guard = outputs.lock().await;

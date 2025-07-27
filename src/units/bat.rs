@@ -1,15 +1,17 @@
 use crate::core::{Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
-use crate::display::{color, color_by_pct};
-use crate::util::RotateEnum;
+use crate::display::{color, color_by_pct_rev};
+use crate::util::{Ema, RotateEnum, Smoother};
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::collections::{HashMap, VecDeque};
+use serde_inline_default::serde_inline_default;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::time::Instant;
 
-mode_enum!(CurCapacity, DesignCapacity, VoltageCurrent);
+mode_enum!(CurCapacity, DesignCapacity);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 enum BatStatus {
@@ -36,43 +38,42 @@ impl BatStatus {
     }
     pub fn state_string(&self) -> String {
         match self {
-            Self::Discharging => color("dis", ORANGE),
-            Self::Charging => color("chr", GREEN),
-            Self::Full => color("ful", BLUE),
-            Self::Balanced => color("bal", CYAN),
-            _ => color("unk", VIOLET),
+            Self::Discharging => color("DIS", ORANGE),
+            Self::Charging => color("CHR", GREEN),
+            Self::Full => color("FUL", BLUE),
+            Self::Balanced => color("BAL", CYAN),
+            _ => color("UNK", VIOLET),
         }
     }
 }
 
+#[serde_inline_default]
 #[derive(Debug, Clone, Deserialize)]
 pub struct BatConfig {
-    pub poll_interval: f64,
     pub bat_id: usize,
+    #[serde_inline_default(2.5)]
+    pub power_smoothing_sec: f64,
 }
 
 #[derive(Debug)]
 pub struct Bat {
+    cfg: BatConfig,
     mode: DisplayMode,
     cur_status: BatStatus,
-    min_rem_smooth: Option<f64>,
-    p_hist: VecDeque<f64>,
-    p_hist_maxlen: usize,
     uevent_path: String,
+    power_ema: Ema<f64>,
 }
 
 impl Bat {
     pub fn from_cfg(cfg: BatConfig) -> Self {
         // TODO seems fragile? use a crate etc.
         let uevent_path = format!("/sys/class/power_supply/BAT{}/uevent", cfg.bat_id);
-        let p_hist_maxlen = (10.0 / cfg.poll_interval).ceil() as usize;
         Self {
             mode: DisplayMode::CurCapacity,
-            min_rem_smooth: None,
             cur_status: BatStatus::Unknown,
-            p_hist: VecDeque::with_capacity(p_hist_maxlen),
-            p_hist_maxlen,
             uevent_path,
+            power_ema: Ema::new(cfg.power_smoothing_sec),
+            cfg,
         }
     }
 
@@ -103,8 +104,6 @@ pub struct BatteryInfo {
     pub power: f64,
     pub energy: f64,
     pub energy_max: f64,
-    pub voltage: Option<f64>,
-    pub current: Option<f64>,
 }
 
 impl BatteryInfo {
@@ -143,8 +142,6 @@ impl BatteryInfo {
             power,
             energy,
             energy_max,
-            voltage: Some(voltage),
-            current: Some(current),
         })
     }
 
@@ -169,8 +166,6 @@ impl BatteryInfo {
             power,
             energy,
             energy_max,
-            voltage: None,
-            current: None,
         })
     }
 }
@@ -199,56 +194,49 @@ impl Unit for Bat {
                 }
             };
 
-        // Power smoothing
-        if self.p_hist.len() == self.p_hist_maxlen {
-            self.p_hist.pop_front();
-        }
-        self.p_hist.push_back(bi.power);
-        let av_p = if !self.p_hist.is_empty() {
-            self.p_hist.iter().sum::<f64>() / self.p_hist.len() as f64
-        } else {
-            bi.power
-        };
+        let p_smooth = *self
+            .power_ema
+            .feed_and_read(bi.power, Instant::now())
+            .unwrap_or(&bi.power);
 
         let pct = if self.mode == DisplayMode::DesignCapacity {
             100.0 * bi.charged_frac_design
         } else {
             100.0 * bi.charged_frac
         };
-        let pct_str = color(format!("{pct:3.0}"), color_by_pct(pct));
+
+        let pct_str = color(format!("{pct:3.0}"), color_by_pct_rev(pct));
 
         // Determine battery state
         let mut bs = BatStatus::from_uevent(&uevent);
-        if bs == BatStatus::Other && av_p == 0.0 {
+        if bs == BatStatus::Other && p_smooth == 0.0 {
             bs = BatStatus::Balanced;
         }
 
         // Reset smoothing if status changes
         if bs != self.cur_status {
-            self.min_rem_smooth = None;
             self.cur_status = bs;
-            self.p_hist.clear();
+            self.power_ema = Ema::new(self.cfg.power_smoothing_sec);
         }
 
         // Estimate time remaining in seconds
         let sec_rem: Option<f64> = match bs {
             BatStatus::Charging => {
-                if av_p > 0.0 {
-                    Some((bi.energy_max - bi.energy) / av_p)
+                if p_smooth > 0.0 {
+                    Some((bi.energy_max - bi.energy) / p_smooth)
                 } else {
                     None
                 }
             }
             BatStatus::Discharging => {
-                if av_p > 0.0 {
-                    Some(bi.energy / av_p)
+                if p_smooth > 0.0 {
+                    Some(bi.energy / p_smooth)
                 } else {
                     None
                 }
             }
             _ => None,
         };
-
         let rem_string = match sec_rem {
             Some(sec) => {
                 let mins = (sec / 60.0).round() as i64;
@@ -258,28 +246,14 @@ impl Unit for Bat {
             }
             None => String::from("--:--"),
         };
-
-        if self.mode != DisplayMode::VoltageCurrent {
-            let brackets = match self.mode {
-                DisplayMode::CurCapacity => ["{", "}"],
-                DisplayMode::DesignCapacity => ["<", ">"],
-                _ => unreachable!(), // TODO fugly learn how to handle shared destructure with
-                                     // fallthrough
-            };
-
-            format!(
-                "bat {}{}%{} [{} rem, {}]",
-                brackets[0],
-                pct_str,
-                brackets[1],
-                rem_string,
-                bs.state_string()
-            )
-        } else {
-            let voltage = bi.voltage.map_or("--".to_string(), |v| format!("{v:.2} V"));
-            let current = bi.current.map_or("--".to_string(), |c| format!("{c:.2} A"));
-            format!("({voltage} | {current})")
-        }
+        let (br0, br1) = match self.mode {
+            DisplayMode::CurCapacity => ("[", "]"),
+            DisplayMode::DesignCapacity => ("&lt;", "&gt;"),
+        };
+        format!(
+            "bat {br0}{pct_str}%{br1} {} {p_smooth:2.2} W [{rem_string} rem]",
+            bs.state_string(),
+        )
     }
     impl_handle_click_rotate_mode!();
 }

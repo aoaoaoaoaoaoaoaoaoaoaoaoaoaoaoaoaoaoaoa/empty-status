@@ -74,7 +74,6 @@ impl Net {
         let (_tx, rx) = mpsc::unbounded_channel();
         let ping_times = VecDeque::with_capacity(cfg.ping_window);
         Self {
-            cfg: cfg.clone(),
             mode: DisplayMode::Bandwidth,
             rxtx: None,
             rx_ema: Ema::new(cfg.smoothing_window_sec),
@@ -84,6 +83,7 @@ impl Net {
             ping_times,
             ping_received: 0,
             ping_last_seq: 0,
+            cfg,
         }
     }
     /// Spawn the system ping command and stream rtt values (ms) into an mpsc.

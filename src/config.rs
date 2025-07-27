@@ -38,15 +38,16 @@ pub struct SchedulingCfg {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct GlobalConfig {
-    pub min_sleep: f64,
+    pub min_polling_interval: f64,
     pub padding: i32,
 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
-            min_sleep: 0.1,
+            min_polling_interval: 0.25,
             padding: 1,
         }
     }
@@ -108,13 +109,14 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
         });
     }
 
-    wrappers.reverse(); // make first in list rightmost
+    wrappers.reverse();
+    info!("Using global config: {:?}", raw.global);
     EmptyStatus::new(wrappers, raw.global)
 }
 
 fn sample_config() -> &'static str {
     r#"# each unit defines its own polling interval. to save resources you can define a global floor here
-min_sleep = 0.15
+min_polling_interval = 0.15
 padding = 1
 
 # units will appear on the bar in the same order as they are defined here

@@ -65,7 +65,6 @@ impl Disk {
         info!("computed write thresholds: {:?}", write_threshs);
 
         Self {
-            cfg: cfg.clone(),
             stat_path,
             sector_size,
             write_ema: Ema::new(cfg.smoothing_sec),
@@ -75,6 +74,7 @@ impl Disk {
             last_r,
             last_w,
             last_t: Instant::now(),
+            cfg,
         }
     }
 

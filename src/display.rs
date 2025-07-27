@@ -31,6 +31,20 @@ pub fn color_by_pct_custom(value: f64, breakpoints: &[f64; 4]) -> String {
     color_by_breakpoint(value, breakpoints, PCT_COLORS, COL_USE_SCREAMING)
 }
 
+pub fn color_by_pct_rev(value: f64) -> String {
+    color_by_breakpoint(
+        value,
+        PCT_BPS,
+        &[
+            COL_USE_SCREAMING,
+            COL_USE_VERY_HIGH,
+            COL_USE_HIGH,
+            COL_USE_NORM,
+        ],
+        COL_USE_COOL,
+    )
+}
+
 // Add color to text using pango markup
 pub fn color<S: AsRef<str>, T: AsRef<str>>(text: S, color: T) -> String {
     pangofy(text.as_ref(), Some(color.as_ref()), None)

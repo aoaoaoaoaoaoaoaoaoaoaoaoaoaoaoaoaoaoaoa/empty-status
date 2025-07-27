@@ -11,12 +11,9 @@ pub fn iter() -> impl Iterator<Item = &'static UnitFactory> {
     inventory::iter::<UnitFactory>()
 }
 
-// in src/unit_factory.rs
 #[macro_export]
 macro_rules! register_unit {
-    // $ty: the full path to your Unit type
-    // $cfg: the full path to your Config type
-    ($ty:path, $cfg:path) => {
+    ($ty:ident, $cfg:ident) => {
         use $crate::registry::UnitFactory;
         inventory::submit! {
             UnitFactory {
