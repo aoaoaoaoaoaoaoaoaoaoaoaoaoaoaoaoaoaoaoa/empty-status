@@ -101,12 +101,12 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                 continue;
             }
         };
-
-        wrappers.push(UnitWrapper {
-            unit: unit_obj,
-            cfg: sched,
+        wrappers.push(UnitWrapper::new(
+            unit_obj,
+            raw.global.clone(),
+            sched,
             handle,
-        });
+        ));
     }
 
     wrappers.reverse();

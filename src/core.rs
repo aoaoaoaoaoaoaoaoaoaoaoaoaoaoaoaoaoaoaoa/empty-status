@@ -58,6 +58,7 @@ impl OutputChunk {
     }
 }
 
+/// the fields of this object come directly from i3 and should not be touched
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ClickEvent {
     pub name: String,
@@ -88,9 +89,30 @@ pub trait Unit: Send + Sync + std::fmt::Debug {
 pub struct UnitWrapper {
     pub unit: Box<dyn Unit>,
     pub cfg: SchedulingCfg,
+    gcfg: GlobalConfig,
     pub handle: usize,
+    /// The name we give i3 -- used for click handling. Must be globally unique.
+    pub i3_name: String,
 }
 
+impl UnitWrapper {
+    pub fn new(unit: Box<dyn Unit>, gcfg: GlobalConfig, cfg: SchedulingCfg, handle: usize) -> Self {
+        Self {
+            i3_name: format!("{}::{}", unit.name(), handle),
+            unit,
+            cfg,
+            gcfg,
+            handle,
+        }
+    }
+
+    fn make_chunk(&self, text: String) -> OutputChunk {
+        let mut chunk = OutputChunk::new(&self.i3_name, text);
+        let pad = " ".repeat(self.gcfg.padding as usize);
+        chunk.full_text = format!("{pad}{}{pad}", chunk.full_text);
+        chunk
+    }
+}
 pub struct EmptyStatus {
     wrappers: Vec<UnitWrapper>,
     cfg: GlobalConfig,
@@ -109,12 +131,7 @@ impl EmptyStatus {
 
         let mut unit_outputs = std::collections::HashMap::new();
         for su in &units {
-            let name = su.unit.name();
-            let chunk = process_chunk(
-                su.unit.name(),
-                color(format!("unit '{name}' loading"), VIOLET),
-                cfg.padding,
-            );
+            let chunk = su.make_chunk(color(format!("unit '{}' loading", su.unit.name()), VIOLET));
             unit_outputs.insert(su.handle, chunk);
         }
 
@@ -143,7 +160,6 @@ impl EmptyStatus {
         spawn(read_clicks_task(click_tx.clone()));
 
         for mut uwrp in wrappers.into_iter() {
-            let unit_name = uwrp.unit.name();
             let outputs = Arc::clone(&unit_outputs);
             let mut rx = click_tx.subscribe();
 
@@ -157,7 +173,7 @@ impl EmptyStatus {
                 loop {
                     let do_refresh = select! {
                         Ok(click) = rx.recv() => {
-                            if click.name == unit_name {
+                            if click.name == uwrp.i3_name {
                                 uwrp.unit.handle_click(click);
                                 true
                             } else {
@@ -169,7 +185,7 @@ impl EmptyStatus {
                     if do_refresh {
                         let result = uwrp.unit.read_formatted().await;
                         let mut guard = outputs.lock().await;
-                        guard.insert(uwrp.handle, process_chunk(unit_name, result, cfg.padding));
+                        guard.insert(uwrp.handle, uwrp.make_chunk(result));
                     }
                 }
             });
@@ -207,14 +223,6 @@ impl EmptyStatus {
         }
         std::future::pending::<()>().await;
     }
-}
-fn process_chunk(name: &str, text: String, padding: i32) -> OutputChunk {
-    let mut chunk = OutputChunk::new(name, text);
-
-    let pad = " ".repeat(padding as usize);
-    chunk.full_text = format!("{pad}{}{pad}", chunk.full_text);
-
-    chunk
 }
 
 async fn read_clicks_task(click_tx: Sender<ClickEvent>) {
