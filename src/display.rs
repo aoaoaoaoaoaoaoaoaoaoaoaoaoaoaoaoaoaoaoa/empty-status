@@ -26,6 +26,7 @@ pub fn color_by_pct(value: f64) -> String {
     color_by_breakpoint(value, PCT_BPS, PCT_COLORS, COL_USE_SCREAMING)
 }
 
+// TODO implement proper gradients! yeah!
 pub fn color_by_pct_custom(value: f64, breakpoints: &[f64; 4]) -> String {
     color_by_breakpoint(value, breakpoints, PCT_COLORS, COL_USE_SCREAMING)
 }
