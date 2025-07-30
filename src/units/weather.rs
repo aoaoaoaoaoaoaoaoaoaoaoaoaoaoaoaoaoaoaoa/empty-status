@@ -3,6 +3,7 @@
 // TODO tempt unids in config
 // TODO wind stuff on click, maybe other modes
 // TODO phases of the moon!
+// TODO forecasts
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -248,6 +249,7 @@ impl Weather {
             "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&current_weather=true",
             self.cfg.lat, self.cfg.lon
         );
+        self.res = None;
         let res: OMResponse = reqwest::get(&url).await?.json().await?;
         self.res = Some(res.current_weather);
         self.last_poll = Some(Instant::now());
@@ -265,18 +267,15 @@ impl Unit for Weather {
             Instant::now().duration_since(last).as_secs_f64() > self.cfg.refresh_interval_sec
         }) {
             if let Err(e) = self.poll_provider().await {
-                self.validation = Err(e);
+                return format!("weather {}", color(format!("error: {e}"), RED));
             }
         }
 
         let res = match self.res {
             Some(ref weather) => weather,
-            None => match self.last_poll {
-                None => return format!("weather {}", color("loading", VIOLET)),
-                // TODO some roughness on click where we'll say "loading" again.
-                Some(_) => return format!("weather {}", color("api error", RED)),
-            },
+            None => return format!("weather {}", color("loading", VIOLET)),
         };
+
         format!(
             "weather [{:^4}] {}°C",
             res.weather
@@ -290,8 +289,6 @@ impl Unit for Weather {
     }
 
     fn handle_click(&mut self, _click: ClickEvent) {
-        // Instantly poll weather on click (async context required)
-        // This will be handled by the next read_formatted call
         self.last_poll = None;
     }
 }
