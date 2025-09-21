@@ -84,6 +84,11 @@ pub trait Unit: Send + Sync + std::fmt::Debug {
     // its own error message prettily.
     async fn read_formatted(&mut self) -> String;
     fn handle_click(&mut self, _click: ClickEvent);
+    /// Corrects fixable configuration issues and surfaces unfixable ones as an error.
+    /// If an error is surfaced, its contents will be displayed in the status bar.
+    fn fix_up_and_validate(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 pub struct UnitWrapper {
@@ -159,6 +164,7 @@ impl EmptyStatus {
 
         spawn(read_clicks_task(click_tx.clone()));
 
+        // unit reading loops
         for mut uwrp in wrappers.into_iter() {
             let outputs = Arc::clone(&unit_outputs);
             let mut rx = click_tx.subscribe();
@@ -170,6 +176,18 @@ impl EmptyStatus {
             ticker.tick().await;
 
             spawn(async move {
+                let res = uwrp.unit.fix_up_and_validate();
+                if let Err(e) = res {
+                    let mut guard = outputs.lock().await;
+                    guard.insert(
+                        uwrp.handle,
+                        uwrp.make_chunk(color(
+                            format!("unit '{}' error: {}", uwrp.unit.name(), e),
+                            RED,
+                        )),
+                    );
+                    return;
+                }
                 loop {
                     let do_refresh = select! {
                         Ok(click) = rx.recv() => {
@@ -190,6 +208,8 @@ impl EmptyStatus {
                 }
             });
         }
+
+        // output gather loop
         {
             let outputs = Arc::clone(&unit_outputs);
             let handles = handles.clone();
