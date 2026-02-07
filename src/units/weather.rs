@@ -2,7 +2,7 @@
 // TODO phases of the moon!
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Deserializer};
 use serde_inline_default::serde_inline_default;
 use serde_repr::Deserialize_repr;
@@ -217,15 +217,25 @@ pub struct Weather {
 /// Gets the next forecast times. These are always the next 4 "4-hour-round"
 /// times, e.g. if now is 10:15, returns 12:00, 16:00, 20:00, 00:00, 04:00, 08:00.
 fn get_wanted_forecast_datetimes() -> Vec<DateTime<Utc>> {
-    let now = Utc::now();
-    let next_hour = now.hour() & 0xFC; // round up to next multiple of 4
+    let now_utc = Utc::now();
+    let now_local = now_utc.with_timezone(&chrono::Local);
+
+    // Forecasts are chosen by a 4-hour grid in local time: 00, 04, 08, 12, 16, 20.
+    // The first slot is the first grid point strictly after `now_local`.
+    let start_hour_local = ((now_local.hour() / 4) * 4) + 4;
     let mut times = Vec::new();
     for i in 0..6 {
-        let hour = (next_hour + i * 4) % 24;
-        let day_offset = (next_hour + i * 4) / 24;
-        let date = now.date_naive() + chrono::Duration::days(i64::from(day_offset));
-        let dt = date.and_hms_opt(hour, 0, 0).unwrap();
-        times.push(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
+        let hour = (start_hour_local + i * 4) % 24;
+        let day_offset = (start_hour_local + i * 4) / 24;
+
+        let date_local = now_local.date_naive() + chrono::Duration::days(i64::from(day_offset));
+        let Some(dt_local) = date_local
+            .and_hms_opt(hour, 0, 0)
+            .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
+        else {
+            continue;
+        };
+        times.push(dt_local.with_timezone(&Utc));
     }
     times
 }
@@ -317,7 +327,8 @@ impl Weather {
         let mut out = "weather ".to_string();
         let mut with_times = Vec::new();
         for (time, part) in &out_parts {
-            with_times.push(format!("{:02}[{}]", time.hour(), part));
+            let time_local = time.with_timezone(&chrono::Local);
+            with_times.push(format!("{:02}[{}]", time_local.hour(), part));
         }
         out += with_times.join("-").as_str();
         out

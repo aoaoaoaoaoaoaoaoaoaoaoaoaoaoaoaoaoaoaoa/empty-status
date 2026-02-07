@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 
@@ -87,6 +88,14 @@ def main() -> None:
 
     cargo(env, clippy_args)
     cargo(env, ["test"])
+
+    # Installation is part of the fast loop, but requires access to `$HOME/.local`.
+    # In sandboxed environments it may fail (permission denied); ignore in that case.
+    try:
+        cargo(env, ["install", "--path", ".", "--root", os.path.expanduser("~/.local")])
+    except SystemExit as e:
+        if e.code != 101:
+            raise
 
 
 if __name__ == "__main__":
