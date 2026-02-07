@@ -171,7 +171,7 @@ impl BatteryInfo {
 
 #[async_trait]
 impl Unit for Bat {
-    async fn read_formatted(&mut self) -> String {
+    async fn read_formatted(&mut self) -> crate::core::Readout {
         let mut missing = false;
         let uevent = if let Ok(map) = self.parse_uevent() {
             map
@@ -181,14 +181,14 @@ impl Unit for Bat {
         };
 
         if missing || uevent.get("present").is_some_and(|v| v == "0") {
-            return color("No battery", RED);
+            return crate::core::Readout::err(color("No battery", RED));
         }
 
         let bi =
             match BatteryInfo::from_charge(&uevent).or_else(|| BatteryInfo::from_energy(&uevent)) {
                 Some(bi) => bi,
                 None => {
-                    return color("invalid data", RED);
+                    return crate::core::Readout::err(color("invalid data", RED));
                 }
             };
 
@@ -245,10 +245,10 @@ impl Unit for Bat {
             DisplayMode::CurCapacity => ("[", "]"),
             DisplayMode::DesignCapacity => ("&lt;", "&gt;"),
         };
-        format!(
+        crate::core::Readout::ok(format!(
             "bat {br0}{pct_str}%{br1} {} {p_smooth:2.2} W [{rem_string} rem]",
             bs.state_string(),
-        )
+        ))
     }
     impl_handle_click_rotate_mode!();
 }

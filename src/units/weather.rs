@@ -217,27 +217,49 @@ pub struct Weather {
 /// Gets the next forecast times. These are always the next 4 "4-hour-round"
 /// times, e.g. if now is 10:15, returns 12:00, 16:00, 20:00, 00:00, 04:00, 08:00.
 fn get_wanted_forecast_datetimes() -> Vec<DateTime<Utc>> {
+    const STEPS: u32 = 6;
+    const STRIDE_HOURS: u32 = 4;
+
     let now_utc = Utc::now();
     let now_local = now_utc.with_timezone(&chrono::Local);
 
     // Forecasts are chosen by a 4-hour grid in local time: 00, 04, 08, 12, 16, 20.
     // The first slot is the first grid point strictly after `now_local`.
-    let start_hour_local = ((now_local.hour() / 4) * 4) + 4;
-    let mut times = Vec::new();
-    for i in 0..6 {
-        let hour = (start_hour_local + i * 4) % 24;
-        let day_offset = (start_hour_local + i * 4) / 24;
+    let start_hour_local = (now_local.hour() / STRIDE_HOURS) * STRIDE_HOURS + STRIDE_HOURS;
+
+    let mut out = Vec::with_capacity(STEPS as usize);
+
+    for step in 0..STEPS {
+        let hour_total = start_hour_local + step * STRIDE_HOURS;
+        let hour = hour_total % 24;
+        let day_offset = hour_total / 24;
 
         let date_local = now_local.date_naive() + chrono::Duration::days(i64::from(day_offset));
-        let Some(dt_local) = date_local
-            .and_hms_opt(hour, 0, 0)
-            .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
+        let dt_local = date_local.and_hms_opt(hour, 0, 0);
+        let Some(dt_local) =
+            dt_local.and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
         else {
             continue;
         };
-        times.push(dt_local.with_timezone(&Utc));
+
+        out.push(dt_local.with_timezone(&Utc));
     }
-    times
+
+    out
+}
+
+#[cfg(test)]
+mod forecast_tests {
+    use super::get_wanted_forecast_datetimes;
+
+    #[test]
+    fn forecast_times_monotone_utc() {
+        let times = get_wanted_forecast_datetimes();
+        assert!(times.len() >= 4);
+        for w in times.windows(2) {
+            assert!(w[0] < w[1]);
+        }
+    }
 }
 
 impl Weather {
@@ -357,18 +379,18 @@ impl Unit for Weather {
         );
         Ok(())
     }
-    async fn read_formatted(&mut self) -> String {
+    async fn read_formatted(&mut self) -> crate::core::Readout {
         if let Some(err) = self.do_poll_if_needed().await {
-            return err;
+            return crate::core::Readout::err(err);
         }
         let Some(ref res) = self.res else {
-            return format!("weather {}", color("loading", VIOLET));
+            return crate::core::Readout::warn(format!("weather {}", color("loading", VIOLET)));
         };
 
-        match self.mode {
+        crate::core::Readout::ok(match self.mode {
             DisplayMode::Now => self.format_res_now(res.current.as_ref()),
             DisplayMode::Forecast => self.format_res_forecast(res.hourly.as_ref()),
-        }
+        })
     }
     fn handle_click(&mut self, _click: crate::core::ClickEvent) {
         self.mode = crate::util::RotateEnum::next(self.mode);

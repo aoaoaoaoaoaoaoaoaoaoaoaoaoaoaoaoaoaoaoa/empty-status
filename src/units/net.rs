@@ -258,11 +258,11 @@ impl Net {
 
 #[async_trait]
 impl Unit for Net {
-    async fn read_formatted(&mut self) -> String {
-        match self.mode {
+    async fn read_formatted(&mut self) -> crate::core::Readout {
+        crate::core::Readout::ok(match self.mode {
             DisplayMode::Bandwidth => self.read_formatted_stats(),
             DisplayMode::Ping => self.read_formatted_ping(),
-        }
+        })
     }
     fn handle_click(&mut self, _click: ClickEvent) {
         self.mode = match self.mode {

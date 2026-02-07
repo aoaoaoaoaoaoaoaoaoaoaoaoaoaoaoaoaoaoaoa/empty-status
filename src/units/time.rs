@@ -61,11 +61,11 @@ impl Time {
 
 #[async_trait]
 impl Unit for Time {
-    async fn read_formatted(&mut self) -> String {
-        match self.mode {
+    async fn read_formatted(&mut self) -> crate::core::Readout {
+        crate::core::Readout::ok(match self.mode {
             DisplayMode::DateTime => self.read_formatted_datetime(),
             DisplayMode::Uptime => self.read_formatted_uptime(),
-        }
+        })
     }
     impl_handle_click_rotate_mode!();
 }

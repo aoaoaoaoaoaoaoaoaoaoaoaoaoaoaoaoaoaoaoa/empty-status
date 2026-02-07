@@ -76,11 +76,11 @@ impl Mem {
 
 #[async_trait]
 impl Unit for Mem {
-    async fn read_formatted(&mut self) -> String {
-        match self.mode {
+    async fn read_formatted(&mut self) -> crate::core::Readout {
+        crate::core::Readout::ok(match self.mode {
             DisplayMode::Totals => Self::read_formatted_totals(),
             DisplayMode::WorstProcess => Self::read_formatted_worst_rss(),
-        }
+        })
     }
     impl_handle_click_rotate_mode!();
 }

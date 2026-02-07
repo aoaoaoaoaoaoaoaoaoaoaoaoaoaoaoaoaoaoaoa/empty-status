@@ -100,15 +100,15 @@ impl Disk {
 
 #[async_trait]
 impl Unit for Disk {
-    async fn read_formatted(&mut self) -> String {
+    async fn read_formatted(&mut self) -> crate::core::Readout {
         let Some(sector_size) = self.sector_size else {
             let context = format!("disk {} [{{}}]", self.cfg.disk);
-            return context.replace("{}", &color("no such disk", BROWN));
+            return crate::core::Readout::err(context.replace("{}", &color("no such disk", BROWN)));
         };
 
         let Some((r, w)) = Self::read_rw(&self.stat_path, sector_size).ok() else {
             let context = format!("disk {} [{{}}]", self.cfg.disk);
-            return context.replace("{}", &color("no such disk", BROWN));
+            return crate::core::Readout::err(context.replace("{}", &color("no such disk", BROWN)));
         };
 
         let now = Instant::now();
@@ -136,7 +136,9 @@ impl Unit for Disk {
             .position(|&t| *bps_write < t)
             .unwrap_or(BARS.len() - 1)];
 
-        context.replace("{}", &(color(r_bar, BLUE) + &color(w_bar, ORANGE)))
+        crate::core::Readout::ok(
+            context.replace("{}", &(color(r_bar, BLUE) + &color(w_bar, ORANGE))),
+        )
     }
 
     impl_handle_click_nop!();

@@ -43,6 +43,13 @@ pub struct OutputChunk {
     pub color: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkHealth {
+    Ok,
+    Warn,
+    Err,
+}
+
 impl OutputChunk {
     pub fn new(name: &str, text: String) -> Self {
         Self {
@@ -78,11 +85,8 @@ pub trait Unit: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &'static str {
         type_name::<Self>()
     }
-    // we make this an infallible string since units are, in essence, already
-    // mixing data and error information in the display band. a formal error
-    // path would be artificial make-work when the unit can and should just format
-    // its own error message prettily.
-    async fn read_formatted(&mut self) -> String;
+    // We keep this infallible, but make error-ness explicit.
+    async fn read_formatted(&mut self) -> Readout;
     fn handle_click(&mut self, _click: ClickEvent);
     /// Corrects fixable configuration issues and surfaces unfixable ones as an error.
     /// If an error is surfaced, its contents will be displayed in the status bar.
@@ -100,6 +104,35 @@ pub struct UnitWrapper {
     pub i3_name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct Readout {
+    pub text: String,
+    pub health: ChunkHealth,
+}
+
+impl Readout {
+    pub fn ok(text: String) -> Self {
+        Self {
+            text,
+            health: ChunkHealth::Ok,
+        }
+    }
+
+    pub fn warn(text: String) -> Self {
+        Self {
+            text,
+            health: ChunkHealth::Warn,
+        }
+    }
+
+    pub fn err(text: String) -> Self {
+        Self {
+            text,
+            health: ChunkHealth::Err,
+        }
+    }
+}
+
 impl UnitWrapper {
     pub fn new(unit: Box<dyn Unit>, gcfg: GlobalConfig, cfg: SchedulingCfg, handle: usize) -> Self {
         Self {
@@ -115,6 +148,20 @@ impl UnitWrapper {
         let mut chunk = OutputChunk::new(&self.i3_name, text);
         let pad = " ".repeat(self.gcfg.padding.max(0) as usize);
         chunk.full_text = format!("{pad}{}{pad}", chunk.full_text);
+        chunk
+    }
+
+    fn make_chunk_from_readout(&self, readout: Readout) -> OutputChunk {
+        let mut chunk = self.make_chunk(readout.text);
+        match readout.health {
+            ChunkHealth::Ok => {}
+            ChunkHealth::Warn => {
+                chunk.border = YELLOW.to_string();
+            }
+            ChunkHealth::Err => {
+                chunk.border = RED.to_string();
+            }
+        }
         chunk
     }
 }
@@ -203,7 +250,7 @@ impl EmptyStatus {
                     if do_refresh {
                         let result = uwrp.unit.read_formatted().await;
                         let mut guard = outputs.lock().await;
-                        guard.insert(uwrp.handle, uwrp.make_chunk(result));
+                        guard.insert(uwrp.handle, uwrp.make_chunk_from_readout(result));
                     }
                 }
             });

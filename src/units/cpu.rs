@@ -81,11 +81,11 @@ impl Cpu {
 }
 #[async_trait]
 impl Unit for Cpu {
-    async fn read_formatted(&mut self) -> String {
+    async fn read_formatted(&mut self) -> crate::core::Readout {
         let (total, user, kernel) = match Self::read_cpu_times() {
             Ok(times) => times,
             Err(_) => {
-                return color("read err", BROWN);
+                return crate::core::Readout::err(color("read err", BROWN));
             }
         };
 
@@ -133,7 +133,7 @@ impl Unit for Cpu {
                 color(format!("{total_usage:>3.0}%"), color_by_pct(total_usage),)
             )
         };
-        format!("cpu [{load_str}] [temp {temp_str}]")
+        crate::core::Readout::ok(format!("cpu [{load_str}] [temp {temp_str}]"))
     }
 
     impl_handle_click_rotate_mode!();

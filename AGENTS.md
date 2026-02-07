@@ -10,7 +10,7 @@ Git policy:
 Semver policy:
 
 - Any pushed change must update `Cargo.toml` `package.version` and create an annotated tag `vX.Y.Z`.
-- Fixes: bump at least `PATCH`. Features: bump at least `MINOR`. Breaking changes: bump `MAJOR`.
+- Bugfixes: bump at least `PATCH`. Features: bump at least `MINOR`. Breaking changes: bump `MAJOR`.
 - Do not push commits without a corresponding version bump + tag.
 
 Local workflow helpers:
