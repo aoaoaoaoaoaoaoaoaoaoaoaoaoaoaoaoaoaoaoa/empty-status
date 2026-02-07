@@ -1,6 +1,6 @@
 use crate::{
     core::{Unit, BROWN, GREEN, RED, VIOLET},
-    display::{color, color_by_pct_rev},
+    display::color_by_pct_rev,
     impl_handle_click_rotate_mode, mode_enum, register_unit,
     render::markup::Markup,
 };
@@ -34,10 +34,9 @@ impl Wifi {
 impl Unit for Wifi {
     async fn read_formatted(&mut self) -> crate::core::Readout {
         let Ok(mut sock) = Socket::connect() else {
-            return crate::core::Readout::err(Markup::text(format!(
-                "wifi {}",
-                color("no netlink", VIOLET)
-            )));
+            return crate::core::Readout::err(
+                Markup::text("wifi ") + Markup::text("no netlink").fg(VIOLET),
+            );
         };
 
         let Some(interface) = sock.get_interfaces_info().ok().and_then(|v| {
@@ -49,11 +48,10 @@ impl Unit for Wifi {
                     == Some(self.cfg.interface.as_str())
             })
         }) else {
-            return crate::core::Readout::err(Markup::text(format!(
-                "wifi {} {}",
-                self.cfg.interface,
-                color("gone", BROWN)
-            )));
+            return crate::core::Readout::err(
+                Markup::text(format!("wifi {} ", self.cfg.interface))
+                    + Markup::text("gone").fg(BROWN),
+            );
         };
 
         let Some(station) = sock
@@ -61,7 +59,7 @@ impl Unit for Wifi {
             .ok()
             .and_then(|mut v| v.pop())
         else {
-            return crate::core::Readout::err(Markup::text(format!("wifi {}", color("down", RED))));
+            return crate::core::Readout::err(Markup::text("wifi ") + Markup::text("down").fg(RED));
         };
 
         // linear remap −80 dBm→0 %, −30 dBm→100 %
@@ -69,24 +67,19 @@ impl Unit for Wifi {
             * 100.0)
             .round()
             .clamp(0.0, 100.0) as u8;
-        let pct_str = color(format!("{pct:2.0}%"), color_by_pct_rev(f64::from(pct)));
+        let pct_str = Markup::text(format!("{pct:2.0}%")).fg(color_by_pct_rev(f64::from(pct)));
 
+        let ssid = interface
+            .ssid
+            .as_deref()
+            .and_then(|b| str::from_utf8(b).ok())
+            .unwrap_or("?");
         let ssid_str = match self.mode {
-            DisplayMode::ShowSsid => &color(
-                format!(
-                    " [{}]",
-                    interface
-                        .ssid
-                        .as_deref()
-                        .and_then(|b| str::from_utf8(b).ok())
-                        .unwrap_or("?")
-                ),
-                GREEN,
-            ),
-            DisplayMode::HideSsid => "",
+            DisplayMode::ShowSsid => Markup::text(format!(" [{ssid}] ")).fg(GREEN),
+            DisplayMode::HideSsid => Markup::text(" "),
         };
 
-        crate::core::Readout::ok(Markup::text(format!("wifi{ssid_str} {pct_str}%")))
+        crate::core::Readout::ok(Markup::text("wifi") + ssid_str + pct_str)
     }
 
     impl_handle_click_rotate_mode!();

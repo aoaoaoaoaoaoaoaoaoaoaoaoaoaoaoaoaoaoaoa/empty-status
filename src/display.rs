@@ -1,4 +1,5 @@
 use crate::core::{CYAN, GREEN, ORANGE, RED, YELLOW};
+use crate::render::color::Srgb8;
 
 pub const COL_USE_COOL: &str = CYAN;
 pub const COL_USE_NORM: &str = GREEN;
@@ -11,24 +12,24 @@ pub fn color_by_breakpoint<T: Into<String>, const N: usize>(
     breakpoints: &[f64; N],
     colors: &[&'static str; N],
     outer_color: T,
-) -> String {
+) -> Srgb8 {
     for (i, &bp) in breakpoints.iter().enumerate() {
         if value < bp {
-            return colors[i].to_string();
+            return Srgb8::from(colors[i]);
         }
     }
-    outer_color.into()
+    Srgb8::from(outer_color.into())
 }
 const PCT_BPS: &[f64; 4] = &[20.0, 40.0, 60.0, 80.0];
 const PCT_COLORS: &[&str; 4] = &[COL_USE_COOL, COL_USE_NORM, COL_USE_HIGH, COL_USE_VERY_HIGH];
 
 pub fn color_by_pct(value: f64) -> String {
-    color_by_breakpoint(value, PCT_BPS, PCT_COLORS, COL_USE_SCREAMING)
+    color_by_breakpoint(value, PCT_BPS, PCT_COLORS, COL_USE_SCREAMING).to_hex()
 }
 
 // TODO implement proper gradients! yeah!
 pub fn color_by_pct_custom(value: f64, breakpoints: &[f64; 4]) -> String {
-    color_by_breakpoint(value, breakpoints, PCT_COLORS, COL_USE_SCREAMING)
+    color_by_breakpoint(value, breakpoints, PCT_COLORS, COL_USE_SCREAMING).to_hex()
 }
 
 pub fn color_by_pct_rev(value: f64) -> String {
@@ -43,29 +44,7 @@ pub fn color_by_pct_rev(value: f64) -> String {
         ],
         COL_USE_COOL,
     )
-}
-
-pub fn color<S: AsRef<str>, T: AsRef<str>>(text: S, color: T) -> String {
-    pangofy(text.as_ref(), Some(color.as_ref()), None)
-}
-
-pub fn pangofy(text: &str, color: Option<&str>, background: Option<&str>) -> String {
-    let mut attrs = Vec::new();
-
-    if let Some(c) = color {
-        attrs.push(format!("color='{c}'"));
-    }
-
-    if let Some(bg) = background {
-        attrs.push(format!("background='{bg}'"));
-    }
-
-    let text = text.into();
-    if attrs.is_empty() {
-        text
-    } else {
-        format!("<span {}>{text}</span>", attrs.join(" "))
-    }
+    .to_hex()
 }
 
 pub fn format_duration(seconds: f64) -> String {

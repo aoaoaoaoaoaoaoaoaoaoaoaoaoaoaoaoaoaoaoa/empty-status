@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::display::{color_by_pct, color_by_pct_custom};
 use crate::mode_enum;
 use crate::render::markup::Markup;
-use crate::{core::Unit, display::color, impl_handle_click_rotate_mode, register_unit};
+use crate::{core::Unit, impl_handle_click_rotate_mode, register_unit};
 use async_trait::async_trait;
 use serde::Deserialize;
 use sysinfo::{ProcessesToUpdate, System};
@@ -39,11 +39,13 @@ impl Mem {
         let used_gib = used_bytes as f64 / (1 << 30) as f64;
         let used_percent = used_frac * 100.0;
 
-        let col = color_by_pct(used_percent);
-        let formatted_gib = color(format!("{used_gib:>4.1}"), &col);
-        let formatted_percent = color(format!("{used_percent:>2.0}"), &col);
-
-        format!("mem [used {formatted_gib} GiB ({formatted_percent}%)]",)
+        let col = crate::render::color::Srgb8::from(color_by_pct(used_percent));
+        (Markup::text("mem [used ")
+            + Markup::text(format!("{used_gib:>4.1}")).fg(col)
+            + Markup::text(" GiB (")
+            + Markup::text(format!("{used_percent:>2.0}")).fg(col)
+            + Markup::text("%)]"))
+        .to_string()
     }
 
     fn read_formatted_worst_rss() -> String {
@@ -69,9 +71,16 @@ impl Mem {
 
         let max_rss_gib = max_rss_bytes as f64 / (1 << 30) as f64;
         let max_rss_rel = max_rss_bytes as f64 / sys.total_memory() as f64 * 100.0;
-        let col = color_by_pct_custom(max_rss_rel, &[5.0, 10.0, 20.0, 50.0]);
-        let max_rss_str = color(format!("{max_rss_gib:>2.3}"), col);
-        format!("mem [worst {max_name}: {max_rss_str} GiB rss]")
+        let col = crate::render::color::Srgb8::from(color_by_pct_custom(
+            max_rss_rel,
+            &[5.0, 10.0, 20.0, 50.0],
+        ));
+        (Markup::text("mem [worst ")
+            + Markup::text(max_name)
+            + Markup::text(": ")
+            + Markup::text(format!("{max_rss_gib:>2.3}")).fg(col)
+            + Markup::text(" GiB rss]"))
+        .to_string()
     }
 }
 

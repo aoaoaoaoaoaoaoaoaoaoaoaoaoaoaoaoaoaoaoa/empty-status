@@ -1,5 +1,5 @@
 use crate::core::{Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
-use crate::display::{color, color_by_pct_rev};
+use crate::display::color_by_pct_rev;
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
@@ -37,13 +37,13 @@ impl BatStatus {
             None => Self::Other,
         }
     }
-    pub fn state_string(self) -> String {
+    pub fn state_markup(self) -> Markup {
         match self {
-            Self::Discharging => color("DIS", ORANGE),
-            Self::Charging => color("CHR", GREEN),
-            Self::Full => color("FUL", CYAN),
-            Self::Balanced => color("BAL", BLUE),
-            _ => color("UNK", VIOLET),
+            Self::Discharging => Markup::text("DIS").fg(ORANGE),
+            Self::Charging => Markup::text("CHR").fg(GREEN),
+            Self::Full => Markup::text("FUL").fg(CYAN),
+            Self::Balanced => Markup::text("BAL").fg(BLUE),
+            _ => Markup::text("UNK").fg(VIOLET),
         }
     }
 }
@@ -182,14 +182,14 @@ impl Unit for Bat {
         };
 
         if missing || uevent.get("present").is_some_and(|v| v == "0") {
-            return crate::core::Readout::err(Markup::text(color("No battery", RED)));
+            return crate::core::Readout::err(Markup::text("No battery").fg(RED));
         }
 
         let bi =
             match BatteryInfo::from_charge(&uevent).or_else(|| BatteryInfo::from_energy(&uevent)) {
                 Some(bi) => bi,
                 None => {
-                    return crate::core::Readout::err(Markup::text(color("invalid data", RED)));
+                    return crate::core::Readout::err(Markup::text("invalid data").fg(RED));
                 }
             };
 
@@ -204,7 +204,7 @@ impl Unit for Bat {
             100.0 * bi.charged_frac
         };
 
-        let pct_str = color(format!("{pct:3.0}"), color_by_pct_rev(pct));
+        let pct_str = Markup::text(format!("{pct:3.0}")).fg(color_by_pct_rev(pct));
 
         let mut bs = BatStatus::from_uevent(&uevent);
         if bs == BatStatus::Other && p_smooth == 0.0 {
@@ -246,10 +246,15 @@ impl Unit for Bat {
             DisplayMode::CurCapacity => ("[", "]"),
             DisplayMode::DesignCapacity => ("&lt;", "&gt;"),
         };
-        crate::core::Readout::ok(Markup::text(format!(
-            "bat {br0}{pct_str}%{br1} {} {p_smooth:2.2} W [{rem_string} rem]",
-            bs.state_string(),
-        )))
+        crate::core::Readout::ok(
+            Markup::text(format!("bat {br0}"))
+                .append(pct_str)
+                .append(Markup::text(format!("%{br1} ")))
+                .append(bs.state_markup())
+                .append(Markup::text(format!(
+                    " {p_smooth:2.2} W [{rem_string} rem]"
+                ))),
+        )
     }
     impl_handle_click_rotate_mode!();
 }

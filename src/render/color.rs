@@ -33,6 +33,13 @@ impl From<String> for Srgb8 {
     }
 }
 
+impl Srgb8 {
+    #[must_use]
+    pub fn to_hex(self) -> String {
+        format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
+    }
+}
+
 #[allow(dead_code)]
 impl Srgb8 {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {

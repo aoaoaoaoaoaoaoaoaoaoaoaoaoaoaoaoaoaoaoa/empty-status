@@ -72,21 +72,6 @@ impl Style {
     // Intentionally omitted for now: we have no background use-sites yet.
 }
 
-impl Markup {
-    #[must_use]
-    pub fn join(sep: impl Into<Markup>, parts: impl IntoIterator<Item = Markup>) -> Markup {
-        let sep = sep.into();
-        let mut it = parts.into_iter();
-        let Some(mut out) = it.next() else {
-            return Markup::empty();
-        };
-        for part in it {
-            out = out.append(sep.clone()).append(part);
-        }
-        out
-    }
-}
-
 impl From<&str> for Markup {
     fn from(value: &str) -> Self {
         Markup::text(value)

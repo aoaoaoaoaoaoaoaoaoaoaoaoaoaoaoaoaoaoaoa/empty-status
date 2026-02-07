@@ -14,7 +14,6 @@ use tokio::{select, spawn};
 use tracing::warn;
 
 use crate::config::{GlobalConfig, SchedulingCfg};
-use crate::display::color;
 use crate::render::markup::Markup;
 
 // Color definitions from the base16 tomorrow theme
@@ -184,7 +183,11 @@ impl EmptyStatus {
 
         let mut unit_outputs = std::collections::HashMap::new();
         for su in &units {
-            let chunk = su.make_chunk(color(format!("unit '{}' loading", su.unit.name()), VIOLET));
+            let chunk = su.make_chunk(
+                (Markup::text(format!("unit '{}' ", su.unit.name()))
+                    + Markup::text("loading").fg(VIOLET))
+                .to_string(),
+            );
             unit_outputs.insert(su.handle, chunk);
         }
 
@@ -229,10 +232,11 @@ impl EmptyStatus {
                     let mut guard = outputs.lock().await;
                     guard.insert(
                         uwrp.handle,
-                        uwrp.make_chunk(color(
-                            format!("unit '{}' error: {}", uwrp.unit.name(), e),
-                            RED,
-                        )),
+                        uwrp.make_chunk(
+                            (Markup::text(format!("unit '{}' error: ", uwrp.unit.name()))
+                                + Markup::text(e.to_string()).fg(RED))
+                            .to_string(),
+                        ),
                     );
                     return;
                 }

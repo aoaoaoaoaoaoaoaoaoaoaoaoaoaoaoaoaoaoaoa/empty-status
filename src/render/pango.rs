@@ -1,4 +1,3 @@
-use crate::render::color::Srgb8;
 use crate::render::markup::{Markup, Span, Style};
 
 #[allow(dead_code)]
@@ -47,15 +46,5 @@ fn render_text(text: &str, style: Style) -> String {
         text.to_string()
     } else {
         format!("<span {}>{}</span>", attrs.join(" "), text)
-    }
-}
-
-trait Hex {
-    fn to_hex(self) -> String;
-}
-
-impl Hex for Srgb8 {
-    fn to_hex(self) -> String {
-        format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
     }
 }

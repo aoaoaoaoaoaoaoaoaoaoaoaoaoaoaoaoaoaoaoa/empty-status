@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader};
 use sysinfo::Components;
 
 use crate::core::{Unit, BROWN, VIOLET};
-use crate::display::{color, color_by_pct, color_by_pct_custom};
+use crate::display::{color_by_pct, color_by_pct_custom};
 use crate::render::markup::Markup;
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 
@@ -86,7 +86,7 @@ impl Unit for Cpu {
         let (total, user, kernel) = match Self::read_cpu_times() {
             Ok(times) => times,
             Err(_) => {
-                return crate::core::Readout::err(Markup::text(color("read err", BROWN)));
+                return crate::core::Readout::err(Markup::text("read err").fg(BROWN));
             }
         };
 
@@ -110,31 +110,28 @@ impl Unit for Cpu {
         let total_usage = p_user + p_kernel;
 
         let temp_str = match Self::read_temp() {
-            Err(_) => color("unk", VIOLET),
-            Ok(tc) => {
-                format!(
-                    "{} C",
-                    color(
-                        format!("{tc:>3.0}"),
-                        color_by_pct_custom(tc, &[40.0, 50.0, 70.0, 90.0])
-                    )
-                )
-            }
+            Err(_) => Markup::text("unk").fg(VIOLET),
+            Ok(tc) => Markup::text(format!("{tc:>3.0}"))
+                .fg(color_by_pct_custom(tc, &[40.0, 50.0, 70.0, 90.0]))
+                .append(Markup::text(" C")),
         };
 
         let load_str = if self.mode == DisplayMode::Breakdown {
-            format!(
-                "u {} k {}",
-                color(format!("{p_user:>3.0}%"), color_by_pct(p_user)),
-                color(format!("{p_kernel:>3.0}%"), color_by_pct(p_kernel))
-            )
+            Markup::text("u ")
+                .append(Markup::text(format!("{p_user:>3.0}%")).fg(color_by_pct(p_user)))
+                .append(Markup::text(" k "))
+                .append(Markup::text(format!("{p_kernel:>3.0}%")).fg(color_by_pct(p_kernel)))
         } else {
-            format!(
-                "load {}",
-                color(format!("{total_usage:>3.0}%"), color_by_pct(total_usage),)
-            )
+            Markup::text("load ")
+                .append(Markup::text(format!("{total_usage:>3.0}%")).fg(color_by_pct(total_usage)))
         };
-        crate::core::Readout::ok(Markup::text(format!("cpu [{load_str}] [temp {temp_str}]")))
+        crate::core::Readout::ok(
+            Markup::text("cpu [")
+                .append(load_str)
+                .append(Markup::text("] [temp "))
+                .append(temp_str)
+                .append(Markup::text("]")),
+        )
     }
 
     impl_handle_click_rotate_mode!();

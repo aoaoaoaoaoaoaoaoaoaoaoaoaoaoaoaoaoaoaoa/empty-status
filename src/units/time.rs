@@ -1,11 +1,7 @@
 use crate::display::color_by_pct_custom;
 use crate::mode_enum;
 use crate::render::markup::Markup;
-use crate::{
-    core::Unit,
-    display::{color, format_duration},
-    impl_handle_click_rotate_mode, register_unit,
-};
+use crate::{core::Unit, display::format_duration, impl_handle_click_rotate_mode, register_unit};
 use async_trait::async_trait;
 use chrono::Local;
 use serde::Deserialize;
@@ -46,17 +42,25 @@ impl Time {
         let uptime = System::uptime();
         let load_avg = System::load_average();
         let ut_s = format_duration(f64::from(uptime.min(u32::MAX as u64) as u32));
+
         let mut load_strings = Vec::new();
         for data in [&load_avg.one, &load_avg.five, &load_avg.fifteen] {
-            load_strings.push(color(
-                format!("{data:>3.2}"),
-                color_by_pct_custom(*data, &self.uptime_breakpints),
-            ));
+            load_strings.push(
+                Markup::text(format!("{data:>3.2}"))
+                    .fg(color_by_pct_custom(*data, &self.uptime_breakpints)),
+            );
         }
-        format!(
-            "uptime [{ut_s}] load [{}/{}/{}]",
-            load_strings[0], load_strings[1], load_strings[2]
-        )
+
+        (Markup::text("uptime [")
+            + Markup::text(ut_s)
+            + Markup::text("] load [")
+            + load_strings[0].clone()
+            + Markup::text("/")
+            + load_strings[1].clone()
+            + Markup::text("/")
+            + load_strings[2].clone()
+            + Markup::text("]"))
+        .to_string()
     }
 }
 

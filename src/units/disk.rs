@@ -1,5 +1,4 @@
 use crate::core::{Unit, BLUE, BROWN, ORANGE};
-use crate::display::color;
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
 use crate::{impl_handle_click_nop, register_unit};
@@ -103,17 +102,19 @@ impl Disk {
 impl Unit for Disk {
     async fn read_formatted(&mut self) -> crate::core::Readout {
         let Some(sector_size) = self.sector_size else {
-            let context = format!("disk {} [{{}}]", self.cfg.disk);
-            return crate::core::Readout::err(Markup::text(
-                context.replace("{}", &color("no such disk", BROWN)),
-            ));
+            return crate::core::Readout::err(
+                Markup::text(format!("disk {} [", self.cfg.disk))
+                    .append(Markup::text("no such disk").fg(BROWN))
+                    .append(Markup::text("]")),
+            );
         };
 
         let Some((r, w)) = Self::read_rw(&self.stat_path, sector_size).ok() else {
-            let context = format!("disk {} [{{}}]", self.cfg.disk);
-            return crate::core::Readout::err(Markup::text(
-                context.replace("{}", &color("no such disk", BROWN)),
-            ));
+            return crate::core::Readout::err(
+                Markup::text(format!("disk {} [", self.cfg.disk))
+                    .append(Markup::text("no such disk").fg(BROWN))
+                    .append(Markup::text("]")),
+            );
         };
 
         let now = Instant::now();
@@ -129,7 +130,6 @@ impl Unit for Disk {
         let bps_read = self.read_ema.feed_and_read(bps_read, now).unwrap_or(&0.0);
         let bps_write = self.write_ema.feed_and_read(bps_write, now).unwrap_or(&0.0);
 
-        let context = format!("disk {} [{{}}]", self.cfg.disk);
         let r_bar = BARS[self
             .read_threshs
             .iter()
@@ -141,9 +141,12 @@ impl Unit for Disk {
             .position(|&t| *bps_write < t)
             .unwrap_or(BARS.len() - 1)];
 
-        crate::core::Readout::ok(Markup::text(
-            context.replace("{}", &(color(r_bar, BLUE) + &color(w_bar, ORANGE))),
-        ))
+        crate::core::Readout::ok(
+            Markup::text(format!("disk {} [", self.cfg.disk))
+                .append(Markup::text(r_bar).fg(BLUE))
+                .append(Markup::text(w_bar).fg(ORANGE))
+                .append(Markup::text("]")),
+        )
     }
 
     impl_handle_click_nop!();
