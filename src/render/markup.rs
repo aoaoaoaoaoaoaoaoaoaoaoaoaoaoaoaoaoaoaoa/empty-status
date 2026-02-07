@@ -28,10 +28,7 @@ impl Markup {
         Self::styled(Style::default().fg(fg), self)
     }
 
-    #[must_use]
-    pub fn bg(self, bg: crate::render::color::Srgb8) -> Self {
-        Self::styled(Style::default().bg(bg), self)
-    }
+    // Intentionally omitted for now: we have no background use-sites yet.
 
     #[must_use]
     pub fn append(mut self, other: Self) -> Self {
@@ -72,13 +69,7 @@ impl Style {
         }
     }
 
-    #[must_use]
-    pub fn bg(self, bg: crate::render::color::Srgb8) -> Self {
-        Self {
-            bg: Some(bg),
-            ..self
-        }
-    }
+    // Intentionally omitted for now: we have no background use-sites yet.
 }
 
 impl std::ops::Add for Markup {
