@@ -8,6 +8,7 @@ use sysinfo::Components;
 
 use crate::core::{Unit, BROWN, VIOLET};
 use crate::display::{color, color_by_pct, color_by_pct_custom};
+use crate::render::markup::Markup;
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 
 mode_enum!(Combined, Breakdown);
@@ -85,7 +86,7 @@ impl Unit for Cpu {
         let (total, user, kernel) = match Self::read_cpu_times() {
             Ok(times) => times,
             Err(_) => {
-                return crate::core::Readout::err(color("read err", BROWN));
+                return crate::core::Readout::err(Markup::text(color("read err", BROWN)));
             }
         };
 
@@ -133,7 +134,7 @@ impl Unit for Cpu {
                 color(format!("{total_usage:>3.0}%"), color_by_pct(total_usage),)
             )
         };
-        crate::core::Readout::ok(format!("cpu [{load_str}] [temp {temp_str}]"))
+        crate::core::Readout::ok(Markup::text(format!("cpu [{load_str}] [temp {temp_str}]")))
     }
 
     impl_handle_click_rotate_mode!();

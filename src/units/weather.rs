@@ -18,6 +18,7 @@ use crate::{
 use reqwest;
 
 use crate::render::color::{Gradient, Srgb8, Stop};
+use crate::render::markup::Markup;
 
 mode_enum!(Now, Forecast);
 
@@ -405,16 +406,19 @@ impl Unit for Weather {
     }
     async fn read_formatted(&mut self) -> crate::core::Readout {
         if let Some(err) = self.do_poll_if_needed().await {
-            return crate::core::Readout::err(err);
+            return crate::core::Readout::err(Markup::text(err));
         }
         let Some(ref res) = self.res else {
-            return crate::core::Readout::warn(format!("weather {}", color("loading", VIOLET)));
+            return crate::core::Readout::warn(Markup::text(format!(
+                "weather {}",
+                color("loading", VIOLET)
+            )));
         };
 
-        crate::core::Readout::ok(match self.mode {
+        crate::core::Readout::ok(Markup::text(match self.mode {
             DisplayMode::Now => self.format_res_now(res.current.as_ref()),
             DisplayMode::Forecast => self.format_res_forecast(res.hourly.as_ref()),
-        })
+        }))
     }
     fn handle_click(&mut self, _click: crate::core::ClickEvent) {
         self.mode = DisplayMode::next(self.mode);

@@ -17,9 +17,10 @@ impl Markup {
     }
 
     #[must_use]
-    pub fn push(mut self, span: Span) -> Self {
-        self.spans.push(span);
-        self
+    pub fn styled(style: Style, inner: Self) -> Self {
+        Self {
+            spans: vec![Span::Styled(style, inner)],
+        }
     }
 
     #[must_use]
@@ -67,5 +68,19 @@ impl Style {
             bg: Some(bg),
             ..self
         }
+    }
+}
+
+impl std::ops::Add for Markup {
+    type Output = Markup;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        self.append(rhs)
+    }
+}
+
+impl std::fmt::Display for Markup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&crate::render::pango::to_pango(self))
     }
 }

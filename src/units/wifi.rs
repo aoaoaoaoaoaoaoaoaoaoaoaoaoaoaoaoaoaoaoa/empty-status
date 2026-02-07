@@ -2,6 +2,7 @@ use crate::{
     core::{Unit, BROWN, GREEN, RED, VIOLET},
     display::{color, color_by_pct_rev},
     impl_handle_click_rotate_mode, mode_enum, register_unit,
+    render::markup::Markup,
 };
 use async_trait::async_trait;
 use neli_wifi::Socket;
@@ -33,7 +34,10 @@ impl Wifi {
 impl Unit for Wifi {
     async fn read_formatted(&mut self) -> crate::core::Readout {
         let Ok(mut sock) = Socket::connect() else {
-            return crate::core::Readout::err(format!("wifi {}", color("no netlink", VIOLET)));
+            return crate::core::Readout::err(Markup::text(format!(
+                "wifi {}",
+                color("no netlink", VIOLET)
+            )));
         };
 
         let Some(interface) = sock.get_interfaces_info().ok().and_then(|v| {
@@ -45,11 +49,11 @@ impl Unit for Wifi {
                     == Some(self.cfg.interface.as_str())
             })
         }) else {
-            return crate::core::Readout::err(format!(
+            return crate::core::Readout::err(Markup::text(format!(
                 "wifi {} {}",
                 self.cfg.interface,
                 color("gone", BROWN)
-            ));
+            )));
         };
 
         let Some(station) = sock
@@ -57,7 +61,7 @@ impl Unit for Wifi {
             .ok()
             .and_then(|mut v| v.pop())
         else {
-            return crate::core::Readout::err(format!("wifi {}", color("down", RED)));
+            return crate::core::Readout::err(Markup::text(format!("wifi {}", color("down", RED))));
         };
 
         // linear remap −80 dBm→0 %, −30 dBm→100 %
@@ -82,7 +86,7 @@ impl Unit for Wifi {
             DisplayMode::HideSsid => "",
         };
 
-        crate::core::Readout::ok(format!("wifi{ssid_str} {pct_str}%"))
+        crate::core::Readout::ok(Markup::text(format!("wifi{ssid_str} {pct_str}%")))
     }
 
     impl_handle_click_rotate_mode!();

@@ -15,6 +15,7 @@ use tracing::warn;
 
 use crate::config::{GlobalConfig, SchedulingCfg};
 use crate::display::color;
+use crate::render::markup::Markup;
 
 // Color definitions from the base16 tomorrow theme
 pub const DARK_GREY: &str = "#373B41";
@@ -106,28 +107,28 @@ pub struct UnitWrapper {
 
 #[derive(Debug, Clone)]
 pub struct Readout {
-    pub text: String,
+    pub markup: Markup,
     pub health: ChunkHealth,
 }
 
 impl Readout {
-    pub fn ok(text: String) -> Self {
+    pub fn ok(markup: Markup) -> Self {
         Self {
-            text,
+            markup,
             health: ChunkHealth::Ok,
         }
     }
 
-    pub fn warn(text: String) -> Self {
+    pub fn warn(markup: Markup) -> Self {
         Self {
-            text,
+            markup,
             health: ChunkHealth::Warn,
         }
     }
 
-    pub fn err(text: String) -> Self {
+    pub fn err(markup: Markup) -> Self {
         Self {
-            text,
+            markup,
             health: ChunkHealth::Err,
         }
     }
@@ -151,8 +152,8 @@ impl UnitWrapper {
         chunk
     }
 
-    fn make_chunk_from_readout(&self, readout: Readout) -> OutputChunk {
-        let mut chunk = self.make_chunk(readout.text);
+    fn make_chunk_from_readout(&self, readout: &Readout) -> OutputChunk {
+        let mut chunk = self.make_chunk(readout.markup.to_string());
         match readout.health {
             ChunkHealth::Ok => {}
             ChunkHealth::Warn => {
@@ -250,7 +251,7 @@ impl EmptyStatus {
                     if do_refresh {
                         let result = uwrp.unit.read_formatted().await;
                         let mut guard = outputs.lock().await;
-                        guard.insert(uwrp.handle, uwrp.make_chunk_from_readout(result));
+                        guard.insert(uwrp.handle, uwrp.make_chunk_from_readout(&result));
                     }
                 }
             });

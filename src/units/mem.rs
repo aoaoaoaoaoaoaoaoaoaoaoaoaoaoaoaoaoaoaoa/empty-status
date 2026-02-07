@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::display::{color_by_pct, color_by_pct_custom};
 use crate::mode_enum;
+use crate::render::markup::Markup;
 use crate::{core::Unit, display::color, impl_handle_click_rotate_mode, register_unit};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -77,10 +78,10 @@ impl Mem {
 #[async_trait]
 impl Unit for Mem {
     async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(match self.mode {
+        crate::core::Readout::ok(Markup::text(match self.mode {
             DisplayMode::Totals => Self::read_formatted_totals(),
             DisplayMode::WorstProcess => Self::read_formatted_worst_rss(),
-        })
+        }))
     }
     impl_handle_click_rotate_mode!();
 }

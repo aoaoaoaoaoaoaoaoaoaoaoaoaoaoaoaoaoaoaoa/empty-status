@@ -1,5 +1,6 @@
 use crate::core::{Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
 use crate::display::{color, color_by_pct_rev};
+use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
 use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 use anyhow::Result;
@@ -181,14 +182,14 @@ impl Unit for Bat {
         };
 
         if missing || uevent.get("present").is_some_and(|v| v == "0") {
-            return crate::core::Readout::err(color("No battery", RED));
+            return crate::core::Readout::err(Markup::text(color("No battery", RED)));
         }
 
         let bi =
             match BatteryInfo::from_charge(&uevent).or_else(|| BatteryInfo::from_energy(&uevent)) {
                 Some(bi) => bi,
                 None => {
-                    return crate::core::Readout::err(color("invalid data", RED));
+                    return crate::core::Readout::err(Markup::text(color("invalid data", RED)));
                 }
             };
 
@@ -245,10 +246,10 @@ impl Unit for Bat {
             DisplayMode::CurCapacity => ("[", "]"),
             DisplayMode::DesignCapacity => ("&lt;", "&gt;"),
         };
-        crate::core::Readout::ok(format!(
+        crate::core::Readout::ok(Markup::text(format!(
             "bat {br0}{pct_str}%{br1} {} {p_smooth:2.2} W [{rem_string} rem]",
             bs.state_string(),
-        ))
+        )))
     }
     impl_handle_click_rotate_mode!();
 }

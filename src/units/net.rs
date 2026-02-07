@@ -1,5 +1,6 @@
 use crate::core::{ClickEvent, Unit, GREEN, GREY, ORANGE, RED, VIOLET};
 use crate::display::{color, color_by_pct_custom, COL_USE_HIGH, COL_USE_NORM, COL_USE_VERY_HIGH};
+use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
 use crate::{mode_enum, register_unit};
 use anyhow::{Context, Result};
@@ -259,10 +260,10 @@ impl Net {
 #[async_trait]
 impl Unit for Net {
     async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(match self.mode {
+        crate::core::Readout::ok(Markup::text(match self.mode {
             DisplayMode::Bandwidth => self.read_formatted_stats(),
             DisplayMode::Ping => self.read_formatted_ping(),
-        })
+        }))
     }
     fn handle_click(&mut self, _click: ClickEvent) {
         self.mode = match self.mode {
