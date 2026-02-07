@@ -3,6 +3,7 @@ mod config;
 mod core;
 mod display;
 mod registry;
+mod render;
 mod units;
 mod util;
 
