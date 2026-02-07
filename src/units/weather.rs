@@ -323,7 +323,7 @@ impl Weather {
         let grad = Gradient::new(vec![
             Stop {
                 t: 0.0,
-                color: palette::Oklab::from_color(palette::Srgb::new(0.2, 0.4, 1.0)),
+                color: palette::Oklab::from_color(palette::Srgb::new(0.35, 0.55, 1.0)),
             },
             Stop {
                 t: 0.45,
