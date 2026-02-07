@@ -32,12 +32,11 @@ impl Wifi {
 #[async_trait]
 impl Unit for Wifi {
     async fn read_formatted(&mut self) -> String {
-        let mut sock = match Socket::connect() {
-            Ok(s) => s,
-            Err(_) => return format!("wifi {}", color("no netlink", VIOLET)),
+        let Ok(mut sock) = Socket::connect() else {
+            return format!("wifi {}", color("no netlink", VIOLET));
         };
 
-        let interface = match sock.get_interfaces_info().ok().and_then(|v| {
+        let Some(interface) = sock.get_interfaces_info().ok().and_then(|v| {
             v.into_iter().find(|i| {
                 i.name
                     .as_deref()
@@ -45,24 +44,24 @@ impl Unit for Wifi {
                     .and_then(|b| str::from_utf8(&b[..b.len() - 1]).ok())
                     == Some(self.cfg.interface.as_str())
             })
-        }) {
-            Some(i) => i,
-            None => return format!("wifi {} {}", self.cfg.interface, color("gone", BROWN)),
+        }) else {
+            return format!("wifi {} {}", self.cfg.interface, color("gone", BROWN));
         };
 
-        let station = match sock
+        let Some(station) = sock
             .get_station_info(interface.index.unwrap_or_default())
             .ok()
             .and_then(|mut v| v.pop())
-        {
-            Some(s) => s,
-            None => return format!("wifi {}", color("down", RED)),
+        else {
+            return format!("wifi {}", color("down", RED));
         };
 
         // linear remap −80 dBm→0 %, −30 dBm→100 %
-        let pct = (((station.signal.unwrap_or(-127) as f32 + 80.0) / 50.0).clamp(0.0, 1.0) * 100.0)
-            .round() as u8;
-        let pct_str = color(format!("{pct:2.0}%"), color_by_pct_rev(pct as f64));
+        let pct = (((f32::from(station.signal.unwrap_or(-127)) + 80.0) / 50.0).clamp(0.0, 1.0)
+            * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u8;
+        let pct_str = color(format!("{pct:2.0}%"), color_by_pct_rev(f64::from(pct)));
 
         let ssid_str = match self.mode {
             DisplayMode::ShowSsid => &color(

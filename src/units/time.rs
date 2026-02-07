@@ -29,7 +29,7 @@ pub struct Time {
 
 impl Time {
     pub fn from_cfg(cfg: TimeConfig) -> Self {
-        let ncpu = num_cpus::get() as f64;
+        let ncpu = f64::from(num_cpus::get().min(u32::MAX as usize) as u32);
         Self {
             cfg,
             mode: DisplayMode::DateTime,
@@ -44,7 +44,7 @@ impl Time {
     fn read_formatted_uptime(&self) -> String {
         let uptime = System::uptime();
         let load_avg = System::load_average();
-        let ut_s = format_duration(uptime as f64);
+        let ut_s = format_duration(f64::from(uptime.min(u32::MAX as u64) as u32));
         let mut load_strings = Vec::new();
         for data in [&load_avg.one, &load_avg.five, &load_avg.fifteen] {
             load_strings.push(color(

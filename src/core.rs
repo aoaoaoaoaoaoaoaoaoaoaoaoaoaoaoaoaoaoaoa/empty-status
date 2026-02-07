@@ -113,7 +113,7 @@ impl UnitWrapper {
 
     fn make_chunk(&self, text: String) -> OutputChunk {
         let mut chunk = OutputChunk::new(&self.i3_name, text);
-        let pad = " ".repeat(self.gcfg.padding as usize);
+        let pad = " ".repeat(self.gcfg.padding.max(0) as usize);
         chunk.full_text = format!("{pad}{}{pad}", chunk.full_text);
         chunk
     }
@@ -165,7 +165,7 @@ impl EmptyStatus {
         spawn(read_clicks_task(click_tx.clone()));
 
         // unit reading loops
-        for mut uwrp in wrappers.into_iter() {
+        for mut uwrp in wrappers {
             let outputs = Arc::clone(&unit_outputs);
             let mut rx = click_tx.subscribe();
 

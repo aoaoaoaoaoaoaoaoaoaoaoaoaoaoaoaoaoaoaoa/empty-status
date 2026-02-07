@@ -5,20 +5,12 @@ use crate::{impl_handle_click_nop, register_unit};
 use anyhow::Result;
 use async_trait::async_trait;
 use cute::c;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
 use std::fs::{read_dir, read_to_string, File};
 use std::io::Read;
 use std::time::Instant;
 use tracing::info;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DiskData {
-    bps_read: f64,
-    bps_write: f64,
-    err_no_disk: bool,
-}
-
 const BARS: &[&str; 9] = &[" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 #[serde_inline_default]
@@ -109,20 +101,14 @@ impl Disk {
 #[async_trait]
 impl Unit for Disk {
     async fn read_formatted(&mut self) -> String {
-        let sector_size = match self.sector_size {
-            Some(size) => size,
-            None => {
-                let context = format!("disk {} [{{}}]", self.cfg.disk);
-                return context.replace("{}", &color("no such disk", BROWN));
-            }
+        let Some(sector_size) = self.sector_size else {
+            let context = format!("disk {} [{{}}]", self.cfg.disk);
+            return context.replace("{}", &color("no such disk", BROWN));
         };
 
-        let (r, w) = match Self::read_rw(&self.stat_path, sector_size).ok() {
-            Some((r, w)) => (r, w),
-            None => {
-                let context = format!("disk {} [{{}}]", self.cfg.disk);
-                return context.replace("{}", &color("no such disk", BROWN));
-            }
+        let Some((r, w)) = Self::read_rw(&self.stat_path, sector_size).ok() else {
+            let context = format!("disk {} [{{}}]", self.cfg.disk);
+            return context.replace("{}", &color("no such disk", BROWN));
         };
 
         let now = Instant::now();

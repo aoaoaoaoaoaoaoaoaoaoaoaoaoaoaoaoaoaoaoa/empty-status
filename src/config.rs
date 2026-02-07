@@ -71,12 +71,9 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
     let mut wrappers = Vec::with_capacity(raw.units.len());
 
     for (handle, ruc) in raw.units.iter().enumerate() {
-        let factory = match registry::iter().find(|f| f.kind == ruc.kind) {
-            Some(factory) => factory,
-            None => {
-                warn!("Skipping unknown unit type '{}'", ruc.kind);
-                continue;
-            }
+        let Some(factory) = registry::iter().find(|f| f.kind == ruc.kind) else {
+            warn!("Skipping unknown unit type '{}'", ruc.kind);
+            continue;
         };
 
         let unit_obj = match (factory.build)(ruc.rest.clone()) {

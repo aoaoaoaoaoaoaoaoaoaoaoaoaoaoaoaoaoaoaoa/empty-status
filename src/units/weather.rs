@@ -21,7 +21,7 @@ mode_enum!(Now, Forecast);
 const MIN_REFRESH_INTERVAL: f64 = 15.0;
 
 /// All possible Open-Meteo weather codes, per WMO WW definitions.
-/// use serde_repr::Deserialize_repr;
+/// use `serde_repr::Deserialize_repr`;
 #[derive(Clone, Copy, Debug, Deserialize_repr)]
 #[repr(u8)]
 pub enum Wmo {
@@ -90,7 +90,7 @@ impl<T> TimeDependent<T> {
 
 impl Wmo {
     /// A day/night-aware emoji for each condition.
-    fn get_emoji(&self) -> TimeDependent<&'static str> {
+    fn get_emoji(self) -> TimeDependent<&'static str> {
         match self {
             Wmo::ClearSky => TimeDependent::DayNight("☀️", "🌙"),
             Wmo::MainlyClear => TimeDependent::DayNight("🌤️", "🌙☁️"),
@@ -107,8 +107,10 @@ impl Wmo {
             Wmo::DrizzleDense | Wmo::RainHeavy | Wmo::RainShowersViolent => {
                 TimeDependent::Fixed("🌧️🌧️")
             }
-            Wmo::FreezingDrizzleLight | Wmo::FreezingDrizzleDense => TimeDependent::Fixed("🌧️🧊"),
-            Wmo::FreezingRainLight | Wmo::FreezingRainHeavy => TimeDependent::Fixed("🌧️🧊"),
+            Wmo::FreezingDrizzleLight
+            | Wmo::FreezingDrizzleDense
+            | Wmo::FreezingRainLight
+            | Wmo::FreezingRainHeavy => TimeDependent::Fixed("🌧️🧊"),
             Wmo::SnowfallSlight | Wmo::SnowShowersSlight | Wmo::SnowGrains => {
                 TimeDependent::Fixed("🌨️")
             }
@@ -136,7 +138,7 @@ impl TempUnits {
         }
     }
 
-    pub fn from_celcius(&self, temp_c: f64) -> f64 {
+    pub fn convert_from_celcius(&self, temp_c: f64) -> f64 {
         match self {
             TempUnits::Celsius => temp_c,
             TempUnits::Fahrenheit => temp_c * 9.0 / 5.0 + 32.0,
@@ -221,7 +223,7 @@ fn get_wanted_forecast_datetimes() -> Vec<DateTime<Utc>> {
     for i in 0..6 {
         let hour = (next_hour + i * 4) % 24;
         let day_offset = (next_hour + i * 4) / 24;
-        let date = now.date_naive() + chrono::Duration::days(day_offset as i64);
+        let date = now.date_naive() + chrono::Duration::days(i64::from(day_offset));
         let dt = date.and_hms_opt(hour, 0, 0).unwrap();
         times.push(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
     }
@@ -272,11 +274,8 @@ impl Weather {
     }
 
     fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> String {
-        let res = match res {
-            Some(r) => r,
-            None => {
-                return format!("weather {}", color("current failed to load", BROWN));
-            }
+        let Some(res) = res else {
+            return format!("weather {}", color("current failed to load", BROWN));
         };
 
         format!(
@@ -292,7 +291,7 @@ impl Weather {
                 .get_emoji()
                 .get_at(self.cfg.lat, self.cfg.lon, time),
             color(
-                format!("{:2.0}", self.cfg.units.from_celcius(temp_c)),
+                format!("{:2.0}", self.cfg.units.convert_from_celcius(temp_c)),
                 // always color by C! -- should get more colors in here
                 color_by_pct_custom(temp_c, &[-10.0, 15.0, 25.0, 35.0]),
             ),
@@ -301,11 +300,8 @@ impl Weather {
     }
 
     fn format_res_forecast(&self, res: Option<&OMHourlyForecast>) -> String {
-        let res = match res {
-            Some(r) => r,
-            None => {
-                return format!("weather {}", color("forecast failed to load", BROWN));
-            }
+        let Some(res) = res else {
+            return format!("weather {}", color("forecast failed to load", BROWN));
         };
         let times = get_wanted_forecast_datetimes();
         // exact matching should work fine here, everything is rounded
@@ -320,7 +316,7 @@ impl Weather {
 
         let mut out = "weather ".to_string();
         let mut with_times = Vec::new();
-        for (time, part) in out_parts.iter() {
+        for (time, part) in &out_parts {
             with_times.push(format!("{:02}[{}]", time.hour(), part));
         }
         out += with_times.join("-").as_str();
@@ -354,9 +350,8 @@ impl Unit for Weather {
         if let Some(err) = self.do_poll_if_needed().await {
             return err;
         }
-        let res = match self.res {
-            Some(ref weather) => weather,
-            None => return format!("weather {}", color("loading", VIOLET)),
+        let Some(ref res) = self.res else {
+            return format!("weather {}", color("loading", VIOLET));
         };
 
         match self.mode {

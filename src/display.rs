@@ -83,39 +83,39 @@ pub fn format_duration(seconds: f64) -> String {
             (seconds, "s")
         };
 
-        let precision = std::cmp::max(0, 2 - value.log10().floor() as i32);
+        let precision = (2.0 - value.log10().floor()).clamp(0.0, 2.0) as usize;
         format!(
             "  {:.precision$} {:<2} ",
             value,
             unit,
-            precision = precision as usize
+            precision = precision
         )
-    } else if seconds < 3155760000.0 {
+    } else if seconds < 3_155_760_000.0 {
         // Less than 10 years
         if seconds < 3600.0 {
             // < 1 hour
-            let min = (seconds / 60.0).floor() as i32;
-            let sec = (seconds % 60.0) as i32;
+            let min = (seconds / 60.0).floor() as u32;
+            let sec = (seconds % 60.0) as u32;
             format!("{min:2} m {sec:2} s")
         } else if seconds < 86400.0 {
             // < 1 day
-            let hr = (seconds / 3600.0).floor() as i32;
-            let min = ((seconds % 3600.0) / 60.0) as i32;
+            let hr = (seconds / 3600.0).floor() as u32;
+            let min = ((seconds % 3600.0) / 60.0) as u32;
             format!("{hr:2} h {min:2} m")
-        } else if seconds < 604800.0 {
+        } else if seconds < 604_800.0 {
             // < 1 week
-            let day = (seconds / 86400.0).floor() as i32;
-            let hr = ((seconds % 86400.0) / 3600.0) as i32;
+            let day = (seconds / 86400.0).floor() as u32;
+            let hr = ((seconds % 86400.0) / 3600.0) as u32;
             format!("{day:2} d {hr:2} h")
-        } else if seconds < 31557600.0 {
+        } else if seconds < 31_557_600.0 {
             // < 1 year
-            let week = (seconds / 604800.0).floor() as i32;
-            let day = ((seconds % 604800.0) / 86400.0) as i32;
+            let week = (seconds / 604_800.0).floor() as u32;
+            let day = ((seconds % 604_800.0) / 86_400.0) as u32;
             format!("{week:2} w {day:2} d")
         } else {
             // < 10 years
-            let year = (seconds / 31557600.0).floor() as i32;
-            let week = ((seconds % 31557600.0) / 604800.0) as i32;
+            let year = (seconds / 31_557_600.0).floor() as u32;
+            let week = ((seconds % 31_557_600.0) / 604_800.0) as u32;
             format!("{year:2} y {week:2} w")
         }
     } else {

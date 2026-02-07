@@ -36,7 +36,7 @@ impl BatStatus {
             None => Self::Other,
         }
     }
-    pub fn state_string(&self) -> String {
+    pub fn state_string(self) -> String {
         match self {
             Self::Discharging => color("DIS", ORANGE),
             Self::Charging => color("CHR", GREEN),
@@ -173,15 +173,14 @@ impl BatteryInfo {
 impl Unit for Bat {
     async fn read_formatted(&mut self) -> String {
         let mut missing = false;
-        let uevent = match self.parse_uevent() {
-            Ok(map) => map,
-            Err(_) => {
-                missing = true;
-                HashMap::new()
-            }
+        let uevent = if let Ok(map) = self.parse_uevent() {
+            map
+        } else {
+            missing = true;
+            HashMap::new()
         };
 
-        if missing || uevent.get("present").map(|v| v == "0").unwrap_or(false) {
+        if missing || uevent.get("present").is_some_and(|v| v == "0") {
             return color("No battery", RED);
         }
 

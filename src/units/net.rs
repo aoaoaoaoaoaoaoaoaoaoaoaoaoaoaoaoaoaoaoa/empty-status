@@ -212,12 +212,9 @@ impl Net {
             time: now,
         };
 
-        let prev_rxtx = match self.rxtx.take() {
-            Some(prev_rxtx) => prev_rxtx,
-            None => {
-                self.rxtx = Some(cur_rxtx);
-                return prefix + &color("loading", VIOLET);
-            }
+        let Some(prev_rxtx) = self.rxtx.take() else {
+            self.rxtx = Some(cur_rxtx);
+            return prefix + &color("loading", VIOLET);
         };
 
         let dt_sec = cur_rxtx.time.duration_since(prev_rxtx.time).as_secs_f64();
@@ -238,16 +235,15 @@ impl Net {
         let mut vals = [*bps_down, *bps_up];
         // Order: [down, up]
         for ix in 0..2 {
-            for (mag, sf) in [
+            for (mag, sf) in &[
                 (30u64, color("G/s", COL_USE_VERY_HIGH)),
                 (20u64, color("M/s", COL_USE_HIGH)),
                 (10u64, color("K/s", COL_USE_NORM)),
-            ]
-            .iter()
-            {
-                if vals[ix] > (1u64 << *mag) as f64 {
-                    vals[ix] /= (1u64 << *mag) as u32 as f64;
-                    sfs[ix] = sf.clone();
+            ] {
+                let den = f64::from(1u32 << *mag as u32);
+                if vals[ix] > den {
+                    vals[ix] /= den;
+                    sfs[ix].clone_from(sf);
                     break;
                 }
             }

@@ -65,7 +65,7 @@ impl Cpu {
         Ok((total, user, kernel))
     }
 
-    fn read_temp(&self) -> Result<f64> {
+    fn read_temp() -> Result<f64> {
         let cs = Components::new_with_refreshed_list();
         for component in &cs {
             if let Some((name, _)) = &component.label().split_once(' ') {
@@ -108,7 +108,7 @@ impl Unit for Cpu {
         let p_kernel = p_kernel * 100.0;
         let total_usage = p_user + p_kernel;
 
-        let temp_str = match self.read_temp() {
+        let temp_str = match Self::read_temp() {
             Err(_) => color("unk", VIOLET),
             Ok(tc) => {
                 format!(

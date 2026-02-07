@@ -26,7 +26,7 @@ impl Mem {
             mode: DisplayMode::Totals,
         }
     }
-    fn read_formatted_totals(&self) -> String {
+    fn read_formatted_totals() -> String {
         let mut sys = System::new();
         sys.refresh_memory();
 
@@ -45,7 +45,7 @@ impl Mem {
         format!("mem [used {formatted_gib} GiB ({formatted_percent}%)]",)
     }
 
-    fn read_formatted_worst_rss(&self) -> String {
+    fn read_formatted_worst_rss() -> String {
         let mut sys = System::new();
         sys.refresh_processes(ProcessesToUpdate::All, true);
         sys.refresh_memory();
@@ -78,8 +78,8 @@ impl Mem {
 impl Unit for Mem {
     async fn read_formatted(&mut self) -> String {
         match self.mode {
-            DisplayMode::Totals => self.read_formatted_totals(),
-            DisplayMode::WorstProcess => self.read_formatted_worst_rss(),
+            DisplayMode::Totals => Self::read_formatted_totals(),
+            DisplayMode::WorstProcess => Self::read_formatted_worst_rss(),
         }
     }
     impl_handle_click_rotate_mode!();

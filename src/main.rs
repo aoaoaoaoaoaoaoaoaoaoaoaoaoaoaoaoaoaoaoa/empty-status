@@ -21,9 +21,11 @@ inventory::collect!(crate::registry::UnitFactory);
 fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
     let bd = xdg::BaseDirectories::with_prefix("empty-status");
     let log_dir = bd.get_state_home()?;
-    let filename = "last.log";
-    let file_appender: RollingFileAppender =
-        RollingFileAppender::new(Rotation::NEVER, log_dir, filename);
+    let file_appender: RollingFileAppender = RollingFileAppender::builder()
+        .rotation(Rotation::NEVER)
+        .filename_prefix("last.log")
+        .build(log_dir)
+        .ok()?;
     let (non_blocking_appender, guard) = non_blocking(file_appender);
 
     let filter = EnvFilter::builder()

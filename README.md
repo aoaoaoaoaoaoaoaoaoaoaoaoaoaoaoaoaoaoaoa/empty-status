@@ -71,3 +71,17 @@
             i3i3i3i3i                                                           
               i3i                                                               
 ```
+
+## Dev
+
+Fast checks:
+
+```bash
+python3 scripts/check.py
+```
+
+Install to `~/.local/bin` (via `cargo install --root`):
+
+```bash
+python3 scripts/install.py
+```
