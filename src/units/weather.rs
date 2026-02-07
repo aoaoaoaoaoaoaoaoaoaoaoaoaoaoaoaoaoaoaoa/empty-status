@@ -313,9 +313,11 @@ impl Weather {
             return Markup::text("weather ") + Markup::text("current failed to load").fg(BROWN);
         };
 
-        Markup::text("weather [")
-            .append(self.format_single_code_and_tc(res.time, res.wmo_code, res.temp_c))
-            .append(Markup::text("]"))
+        Markup::text("weather ").append(Markup::bracketed(self.format_single_code_and_tc(
+            res.time,
+            res.wmo_code,
+            res.temp_c,
+        )))
     }
 
     fn format_single_code_and_tc(&self, time: DateTime<Utc>, wmo_code: Wmo, temp_c: f64) -> Markup {
@@ -375,10 +377,8 @@ impl Weather {
             }
 
             let time_local = time.with_timezone(&chrono::Local);
-            out = out
-                .append(Markup::text(format!("{:02}[", time_local.hour())))
-                .append(part)
-                .append(Markup::text("]"));
+            out = out.append(Markup::text(format!("{:02}", time_local.hour())));
+            out = out.append(Markup::bracketed(part));
         }
         out
     }

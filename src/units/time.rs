@@ -51,15 +51,10 @@ impl Time {
             );
         }
 
-        (Markup::text("uptime [")
-            + Markup::text(ut_s)
-            + Markup::text("] load [")
-            + load_strings[0].clone()
-            + Markup::text("/")
-            + load_strings[1].clone()
-            + Markup::text("/")
-            + load_strings[2].clone()
-            + Markup::text("]"))
+        (Markup::text("uptime ")
+            + Markup::bracketed(Markup::text(ut_s))
+            + Markup::text(" load ")
+            + Markup::bracketed(Markup::join("/", load_strings)))
         .to_string()
     }
 }

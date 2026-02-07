@@ -181,13 +181,15 @@ impl Net {
         };
 
         prefix
-            + Markup::text("[med ")
-            + med_str
-            + Markup::text(" mad ")
-            + mad_str
-            + Markup::text(" ms] [")
-            + loss_str
-            + Markup::text("]")
+            + Markup::bracketed(
+                Markup::text("med ")
+                    + med_str
+                    + Markup::text(" mad ")
+                    + mad_str
+                    + Markup::text(" ms"),
+            )
+            + Markup::text(" ")
+            + Markup::bracketed(loss_str)
     }
 
     // STATS
@@ -257,12 +259,9 @@ impl Net {
         }
 
         prefix
-            + Markup::text(format!("[u {:>4.0} ", vals[1]))
-            + sfs[1].clone()
-            + Markup::text("] [d ")
-            + Markup::text(format!("{:4.0} ", vals[0]))
-            + sfs[0].clone()
-            + Markup::text("]")
+            + Markup::bracketed(Markup::text(format!("u {:>4.0} ", vals[1])) + sfs[1].clone())
+            + Markup::text(" ")
+            + Markup::bracketed(Markup::text(format!("d {:4.0} ", vals[0])) + sfs[0].clone())
     }
 }
 

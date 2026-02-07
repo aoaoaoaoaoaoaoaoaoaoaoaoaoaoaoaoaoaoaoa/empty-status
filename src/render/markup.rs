@@ -37,6 +37,29 @@ impl Markup {
     }
 
     #[must_use]
+    pub fn delimited(left: impl Into<Markup>, inner: Markup, right: impl Into<Markup>) -> Markup {
+        left.into().append(inner).append(right.into())
+    }
+
+    #[must_use]
+    pub fn bracketed(inner: Markup) -> Markup {
+        Self::delimited("[", inner, "]")
+    }
+
+    #[must_use]
+    pub fn join(sep: impl Into<Markup>, parts: impl IntoIterator<Item = Markup>) -> Markup {
+        let sep = sep.into();
+        let mut it = parts.into_iter();
+        let Some(mut out) = it.next() else {
+            return Markup::empty();
+        };
+        for part in it {
+            out = out.append(sep.clone()).append(part);
+        }
+        out
+    }
+
+    #[must_use]
     pub fn spans(&self) -> &[Span] {
         &self.spans
     }

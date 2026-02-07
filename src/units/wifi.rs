@@ -75,7 +75,11 @@ impl Unit for Wifi {
             .and_then(|b| str::from_utf8(b).ok())
             .unwrap_or("?");
         let ssid_str = match self.mode {
-            DisplayMode::ShowSsid => Markup::text(format!(" [{ssid}] ")).fg(GREEN),
+            DisplayMode::ShowSsid => {
+                Markup::text(" ")
+                    + Markup::bracketed(Markup::text(ssid).fg(GREEN))
+                    + Markup::text(" ")
+            }
             DisplayMode::HideSsid => Markup::text(" "),
         };
 

@@ -247,13 +247,16 @@ impl Unit for Bat {
             DisplayMode::DesignCapacity => ("&lt;", "&gt;"),
         };
         crate::core::Readout::ok(
-            Markup::text(format!("bat {br0}"))
-                .append(pct_str)
-                .append(Markup::text(format!("%{br1} ")))
+            Markup::text("bat ")
+                .append(Markup::delimited(
+                    br0,
+                    pct_str.append(Markup::text("%")),
+                    br1,
+                ))
+                .append(Markup::text(" "))
                 .append(bs.state_markup())
-                .append(Markup::text(format!(
-                    " {p_smooth:2.2} W [{rem_string} rem]"
-                ))),
+                .append(Markup::text(format!(" {p_smooth:2.2} W ")))
+                .append(Markup::bracketed(Markup::text(format!("{rem_string} rem")))),
         )
     }
     impl_handle_click_rotate_mode!();

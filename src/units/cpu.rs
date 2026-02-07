@@ -126,11 +126,10 @@ impl Unit for Cpu {
                 .append(Markup::text(format!("{total_usage:>3.0}%")).fg(color_by_pct(total_usage)))
         };
         crate::core::Readout::ok(
-            Markup::text("cpu [")
-                .append(load_str)
-                .append(Markup::text("] [temp "))
-                .append(temp_str)
-                .append(Markup::text("]")),
+            Markup::text("cpu ")
+                .append(Markup::bracketed(load_str))
+                .append(Markup::text(" "))
+                .append(Markup::bracketed(Markup::text("temp ").append(temp_str))),
         )
     }
 

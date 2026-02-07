@@ -40,11 +40,14 @@ impl Mem {
         let used_percent = used_frac * 100.0;
 
         let col = crate::render::color::Srgb8::from(color_by_pct(used_percent));
-        (Markup::text("mem [used ")
-            + Markup::text(format!("{used_gib:>4.1}")).fg(col)
-            + Markup::text(" GiB (")
-            + Markup::text(format!("{used_percent:>2.0}")).fg(col)
-            + Markup::text("%)]"))
+        (Markup::text("mem ")
+            + Markup::bracketed(
+                Markup::text("used ")
+                    + Markup::text(format!("{used_gib:>4.1}")).fg(col)
+                    + Markup::text(" GiB (")
+                    + Markup::text(format!("{used_percent:>2.0}")).fg(col)
+                    + Markup::text("%)"),
+            ))
         .to_string()
     }
 
@@ -75,11 +78,14 @@ impl Mem {
             max_rss_rel,
             &[5.0, 10.0, 20.0, 50.0],
         ));
-        (Markup::text("mem [worst ")
-            + Markup::text(max_name)
-            + Markup::text(": ")
-            + Markup::text(format!("{max_rss_gib:>2.3}")).fg(col)
-            + Markup::text(" GiB rss]"))
+        (Markup::text("mem ")
+            + Markup::bracketed(
+                Markup::text("worst ")
+                    + Markup::text(max_name)
+                    + Markup::text(": ")
+                    + Markup::text(format!("{max_rss_gib:>2.3}")).fg(col)
+                    + Markup::text(" GiB rss"),
+            ))
         .to_string()
     }
 }

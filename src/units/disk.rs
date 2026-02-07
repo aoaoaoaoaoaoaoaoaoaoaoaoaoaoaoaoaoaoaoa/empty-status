@@ -103,17 +103,15 @@ impl Unit for Disk {
     async fn read_formatted(&mut self) -> crate::core::Readout {
         let Some(sector_size) = self.sector_size else {
             return crate::core::Readout::err(
-                Markup::text(format!("disk {} [", self.cfg.disk))
-                    .append(Markup::text("no such disk").fg(BROWN))
-                    .append(Markup::text("]")),
+                Markup::text(format!("disk {} ", self.cfg.disk))
+                    .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN))),
             );
         };
 
         let Some((r, w)) = Self::read_rw(&self.stat_path, sector_size).ok() else {
             return crate::core::Readout::err(
-                Markup::text(format!("disk {} [", self.cfg.disk))
-                    .append(Markup::text("no such disk").fg(BROWN))
-                    .append(Markup::text("]")),
+                Markup::text(format!("disk {} ", self.cfg.disk))
+                    .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN))),
             );
         };
 
@@ -142,10 +140,11 @@ impl Unit for Disk {
             .unwrap_or(BARS.len() - 1)];
 
         crate::core::Readout::ok(
-            Markup::text(format!("disk {} [", self.cfg.disk))
-                .append(Markup::text(r_bar).fg(BLUE))
-                .append(Markup::text(w_bar).fg(ORANGE))
-                .append(Markup::text("]")),
+            Markup::text(format!("disk {} ", self.cfg.disk)).append(Markup::bracketed(
+                Markup::text(r_bar)
+                    .fg(BLUE)
+                    .append(Markup::text(w_bar).fg(ORANGE)),
+            )),
         )
     }
 
