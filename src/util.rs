@@ -4,10 +4,6 @@ use std::{
     time::Instant,
 };
 
-pub trait RotateEnum: Sized + Copy {
-    fn next(self) -> Self;
-}
-
 #[macro_export]
 macro_rules! impl_handle_click_nop {
     () => {
@@ -19,8 +15,7 @@ macro_rules! impl_handle_click_nop {
 macro_rules! impl_handle_click_rotate_mode {
     () => {
         fn handle_click(&mut self, _click: $crate::core::ClickEvent) {
-            // self.mode = self.mode.next();
-            self.mode = $crate::util::RotateEnum::next(self.mode);
+            self.mode = DisplayMode::next(self.mode);
         }
     };
 }
@@ -31,12 +26,6 @@ macro_rules! mode_enum {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, empty_status_macros::RotateNext)]
         pub enum DisplayMode {
             $($member),*
-        }
-
-        impl $crate::util::RotateEnum for DisplayMode {
-            fn next(self) -> Self {
-                DisplayMode::next(self)
-            }
         }
     };
 }

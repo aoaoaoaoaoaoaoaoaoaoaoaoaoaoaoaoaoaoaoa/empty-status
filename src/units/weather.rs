@@ -393,7 +393,7 @@ impl Unit for Weather {
         })
     }
     fn handle_click(&mut self, _click: crate::core::ClickEvent) {
-        self.mode = crate::util::RotateEnum::next(self.mode);
+        self.mode = DisplayMode::next(self.mode);
         self.last_successful_poll = None;
     }
 }
