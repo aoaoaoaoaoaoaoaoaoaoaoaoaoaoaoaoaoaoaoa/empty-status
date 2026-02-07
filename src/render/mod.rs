@@ -1,3 +1,3 @@
 pub mod color;
-pub mod doc;
+pub mod markup;
 pub mod pango;

@@ -1,17 +1,38 @@
 use crate::render::color::Srgb8;
-use crate::render::doc::{Doc, Span, Style};
+use crate::render::markup::{Markup, Span, Style};
 
 #[allow(dead_code)]
-pub fn to_pango(doc: &Doc) -> String {
+pub fn to_pango(markup: &Markup) -> String {
     let mut out = String::new();
-    for span in doc.spans() {
+    for span in markup.spans() {
         match span {
-            Span::Text { text, style } => {
-                out.push_str(&render_text(text, *style));
+            Span::Text(text) => out.push_str(&render_text(text, Style::default())),
+            Span::Styled(style, inner) => {
+                out.push_str(&render_styled(*style, inner));
             }
         }
     }
     out
+}
+
+fn render_styled(style: Style, inner: &Markup) -> String {
+    let mut out = String::new();
+    for span in inner.spans() {
+        match span {
+            Span::Text(text) => out.push_str(&render_text(text, style)),
+            Span::Styled(child_style, child_inner) => {
+                out.push_str(&render_styled(merge(style, *child_style), child_inner));
+            }
+        }
+    }
+    out
+}
+
+fn merge(outer: Style, inner: Style) -> Style {
+    Style {
+        fg: inner.fg.or(outer.fg),
+        bg: inner.bg.or(outer.bg),
+    }
 }
 
 fn render_text(text: &str, style: Style) -> String {
