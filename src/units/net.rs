@@ -1,5 +1,5 @@
 use crate::core::{ClickEvent, Unit, GREEN, GREY, ORANGE, RED, VIOLET};
-use crate::display::{color, color_by_pct_custom, COL_USE_HIGH, COL_USE_NORM, COL_USE_VERY_HIGH};
+use crate::display::{color_by_pct_custom, COL_USE_HIGH, COL_USE_NORM, COL_USE_VERY_HIGH};
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
 use crate::{mode_enum, register_unit};
@@ -157,49 +157,55 @@ impl Net {
         (median, mad)
     }
 
-    fn read_formatted_ping(&mut self) -> String {
+    fn read_formatted_ping(&mut self) -> Markup {
         self.refresh_ping_buffer();
-        let prefix = format!(
+        let prefix = Markup::text(format!(
             "net {} [ping {}] ",
             &self.cfg.interface, &self.cfg.ping_server
-        );
+        ));
 
         if self.ping_times.len() < 2 {
-            return prefix + &color("loading", VIOLET);
+            return prefix + Markup::text("loading").fg(VIOLET);
         }
 
         let (med, mad) = Self::median_and_mad(self.ping_times.make_contiguous());
-        let med_str = color(
-            format!("{med:>3.1}"),
-            color_by_pct_custom(med, &[10.0, 20.0, 30.0, 90.0]),
-        );
-        let mad_str = color(
-            format!("{mad:>2.1}"),
-            color_by_pct_custom(mad, &[2.0, 5.0, 10.0, 30.0]),
-        );
+        let med_str = Markup::text(format!("{med:>3.1}"))
+            .fg(color_by_pct_custom(med, &[10.0, 20.0, 30.0, 90.0]));
+        let mad_str = Markup::text(format!("{mad:>2.1}"))
+            .fg(color_by_pct_custom(mad, &[2.0, 5.0, 10.0, 30.0]));
         let loss_pct = 100.0 - 100.0 * self.ping_received as f64 / self.ping_last_seq as f64;
         let loss_str = if loss_pct > 0.0 {
-            color(format!("{loss_pct:>3.1}% loss"), ORANGE)
+            Markup::text(format!("{loss_pct:>3.1}% loss")).fg(ORANGE)
         } else {
-            color("no loss", GREEN)
+            Markup::text("no loss").fg(GREEN)
         };
-        format!("{prefix}[med {med_str} mad {mad_str} ms] [{loss_str}]")
+
+        prefix
+            + Markup::text("[med ")
+            + med_str
+            + Markup::text(" mad ")
+            + mad_str
+            + Markup::text(" ms] [")
+            + loss_str
+            + Markup::text("]")
     }
 
     // STATS
-    fn read_formatted_stats(&mut self) -> String {
+    fn read_formatted_stats(&mut self) -> Markup {
         let nets = Networks::new_with_refreshed_list();
         let Some(net) = nets.get(self.cfg.interface.as_str()) else {
-            return format!("net {} {}", self.cfg.interface, color("gone", RED));
+            return Markup::text(format!("net {} ", self.cfg.interface))
+                + Markup::text("gone").fg(RED);
         };
         let carrier_path = format!("/sys/class/net/{}/carrier", self.cfg.interface);
         if let Ok(carrier) = std::fs::read_to_string(&carrier_path) {
             if carrier.trim() == "0" {
-                return format!("net {} {}", self.cfg.interface, color("down", RED));
+                return Markup::text(format!("net {} ", self.cfg.interface))
+                    + Markup::text("down").fg(RED);
             }
         }
 
-        let prefix = format!("net {} ", self.cfg.interface);
+        let prefix = Markup::text(format!("net {} ", self.cfg.interface));
 
         let now0 = Instant::now();
         let rx_bytes = net.total_received();
@@ -215,7 +221,7 @@ impl Net {
 
         let Some(prev_rxtx) = self.rxtx.take() else {
             self.rxtx = Some(cur_rxtx);
-            return prefix + &color("loading", VIOLET);
+            return prefix + Markup::text("loading").fg(VIOLET);
         };
 
         let dt_sec = cur_rxtx.time.duration_since(prev_rxtx.time).as_secs_f64();
@@ -232,38 +238,41 @@ impl Net {
         let bps_down = self.rx_ema.read().unwrap_or(&0.0);
         let bps_up = self.tx_ema.read().unwrap_or(&0.0);
 
-        let mut sfs = [color("B/s", GREY), color("B/s", GREY)];
+        let mut sfs = [Markup::text("B/s").fg(GREY), Markup::text("B/s").fg(GREY)];
         let mut vals = [*bps_down, *bps_up];
         // Order: [down, up]
         for ix in 0..2 {
             for (mag, sf) in &[
-                (30u64, color("G/s", COL_USE_VERY_HIGH)),
-                (20u64, color("M/s", COL_USE_HIGH)),
-                (10u64, color("K/s", COL_USE_NORM)),
+                (30u64, Markup::text("G/s").fg(COL_USE_VERY_HIGH)),
+                (20u64, Markup::text("M/s").fg(COL_USE_HIGH)),
+                (10u64, Markup::text("K/s").fg(COL_USE_NORM)),
             ] {
                 let den = f64::from(1u32 << *mag as u32);
                 if vals[ix] > den {
                     vals[ix] /= den;
-                    sfs[ix].clone_from(sf);
+                    sfs[ix] = sf.clone();
                     break;
                 }
             }
         }
 
-        format!(
-            "{}[u {:>4.0} {:>3}] [d {:4.0} {:>3}]",
-            prefix, vals[1], sfs[1], vals[0], sfs[0],
-        )
+        prefix
+            + Markup::text(format!("[u {:>4.0} ", vals[1]))
+            + sfs[1].clone()
+            + Markup::text("] [d ")
+            + Markup::text(format!("{:4.0} ", vals[0]))
+            + sfs[0].clone()
+            + Markup::text("]")
     }
 }
 
 #[async_trait]
 impl Unit for Net {
     async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(Markup::text(match self.mode {
+        crate::core::Readout::ok(match self.mode {
             DisplayMode::Bandwidth => self.read_formatted_stats(),
             DisplayMode::Ping => self.read_formatted_ping(),
-        }))
+        })
     }
     fn handle_click(&mut self, _click: ClickEvent) {
         self.mode = match self.mode {

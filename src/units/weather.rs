@@ -10,9 +10,8 @@ use serde_repr::Deserialize_repr;
 use serde_with::{serde_as, DeserializeAs};
 use std::time::Instant;
 
-use crate::display::color;
 use crate::{
-    core::{Unit, BROWN, RED, VIOLET},
+    core::{Unit, BROWN, VIOLET},
     mode_enum, register_unit,
 };
 use reqwest;
@@ -303,7 +302,7 @@ impl Weather {
             Instant::now().duration_since(last).as_secs_f64() > self.cfg.refresh_interval_sec
         }) {
             if let Err(e) = self.poll_weather().await {
-                return format!("weather {}", color(format!("error: {e}"), RED)).into();
+                return format!("weather error: {e}").into();
             }
         }
         None
@@ -311,10 +310,7 @@ impl Weather {
 
     fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> Markup {
         let Some(res) = res else {
-            return Markup::text(format!(
-                "weather {}",
-                color("current failed to load", BROWN)
-            ));
+            return Markup::text("weather ") + Markup::text("current failed to load").fg(BROWN);
         };
 
         Markup::text("weather [")
@@ -359,10 +355,7 @@ impl Weather {
 
     fn format_res_forecast(&self, res: Option<&OMHourlyForecast>) -> Markup {
         let Some(res) = res else {
-            return Markup::text(format!(
-                "weather {}",
-                color("forecast failed to load", BROWN)
-            ));
+            return Markup::text("weather ") + Markup::text("forecast failed to load").fg(BROWN);
         };
         let times = get_wanted_forecast_datetimes();
         // exact matching should work fine here, everything is rounded
@@ -418,10 +411,9 @@ impl Unit for Weather {
             return crate::core::Readout::err(Markup::text(err));
         }
         let Some(ref res) = self.res else {
-            return crate::core::Readout::warn(Markup::text(format!(
-                "weather {}",
-                color("loading", VIOLET)
-            )));
+            return crate::core::Readout::warn(
+                Markup::text("weather ") + Markup::text("loading").fg(VIOLET),
+            );
         };
 
         crate::core::Readout::ok(match self.mode {

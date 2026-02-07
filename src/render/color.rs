@@ -8,6 +8,31 @@ pub struct Srgb8 {
     pub b: u8,
 }
 
+impl From<&str> for Srgb8 {
+    fn from(value: &str) -> Self {
+        let value = value.strip_prefix('#').unwrap_or(value);
+        if value.len() != 6 {
+            return Self::new(0, 0, 0);
+        }
+        let Ok(r) = u8::from_str_radix(&value[0..2], 16) else {
+            return Self::new(0, 0, 0);
+        };
+        let Ok(g) = u8::from_str_radix(&value[2..4], 16) else {
+            return Self::new(0, 0, 0);
+        };
+        let Ok(b) = u8::from_str_radix(&value[4..6], 16) else {
+            return Self::new(0, 0, 0);
+        };
+        Self::new(r, g, b)
+    }
+}
+
+impl From<String> for Srgb8 {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
 #[allow(dead_code)]
 impl Srgb8 {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
