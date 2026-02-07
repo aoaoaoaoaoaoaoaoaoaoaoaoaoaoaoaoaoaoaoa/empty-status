@@ -3,6 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, TimeZone, Timelike, Utc};
+use palette::FromColor;
 use serde::{Deserialize, Deserializer};
 use serde_inline_default::serde_inline_default;
 use serde_repr::Deserialize_repr;
@@ -11,10 +12,12 @@ use std::time::Instant;
 
 use crate::{
     core::{Unit, BROWN, RED, VIOLET},
-    display::{color, color_by_pct_custom},
+    display::color,
     mode_enum, register_unit,
 };
 use reqwest;
+
+use crate::render::color::{Gradient, Srgb8, Stop};
 
 mode_enum!(Now, Forecast);
 
@@ -317,6 +320,28 @@ impl Weather {
     }
 
     fn format_single_code_and_tc(&self, time: DateTime<Utc>, wmo_code: Wmo, temp_c: f64) -> String {
+        let grad = Gradient::new(vec![
+            Stop {
+                t: 0.0,
+                color: palette::Oklab::from_color(palette::Srgb::new(0.2, 0.4, 1.0)),
+            },
+            Stop {
+                t: 0.45,
+                color: palette::Oklab::from_color(palette::Srgb::new(0.2, 1.0, 0.5)),
+            },
+            Stop {
+                t: 0.7,
+                color: palette::Oklab::from_color(palette::Srgb::new(1.0, 0.8, 0.2)),
+            },
+            Stop {
+                t: 1.0,
+                color: palette::Oklab::from_color(palette::Srgb::new(1.0, 0.2, 0.2)),
+            },
+        ]);
+
+        let col: Srgb8 = grad.map_clamped(temp_c, -15.0, 40.0);
+        let col_hex = format!("#{:02X}{:02X}{:02X}", col.r, col.g, col.b);
+
         format!(
             "{}{}°{}",
             wmo_code
@@ -324,8 +349,7 @@ impl Weather {
                 .get_at(self.cfg.lat, self.cfg.lon, time),
             color(
                 format!("{:2.0}", self.cfg.units.convert_from_celcius(temp_c)),
-                // always color by C! -- should get more colors in here
-                color_by_pct_custom(temp_c, &[-10.0, 15.0, 25.0, 35.0]),
+                col_hex,
             ),
             self.cfg.units.suffix(),
         )
