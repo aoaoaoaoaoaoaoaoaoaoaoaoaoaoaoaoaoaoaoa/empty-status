@@ -10,9 +10,9 @@ use serde_repr::Deserialize_repr;
 use serde_with::{serde_as, DeserializeAs};
 use std::time::Instant;
 
+use crate::display::color;
 use crate::{
     core::{Unit, BROWN, RED, VIOLET},
-    display::color,
     mode_enum, register_unit,
 };
 use reqwest;
@@ -309,18 +309,20 @@ impl Weather {
         None
     }
 
-    fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> String {
+    fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> Markup {
         let Some(res) = res else {
-            return format!("weather {}", color("current failed to load", BROWN));
+            return Markup::text(format!(
+                "weather {}",
+                color("current failed to load", BROWN)
+            ));
         };
 
-        format!(
-            "weather [{}]",
-            self.format_single_code_and_tc(res.time, res.wmo_code, res.temp_c)
-        )
+        Markup::text("weather [")
+            .append(self.format_single_code_and_tc(res.time, res.wmo_code, res.temp_c))
+            .append(Markup::text("]"))
     }
 
-    fn format_single_code_and_tc(&self, time: DateTime<Utc>, wmo_code: Wmo, temp_c: f64) -> String {
+    fn format_single_code_and_tc(&self, time: DateTime<Utc>, wmo_code: Wmo, temp_c: f64) -> Markup {
         let grad = Gradient::new(vec![
             Stop {
                 t: 0.0,
@@ -340,25 +342,27 @@ impl Weather {
             },
         ]);
 
+        let emoji = *wmo_code
+            .get_emoji()
+            .get_at(self.cfg.lat, self.cfg.lon, time);
         let col: Srgb8 = grad.map_clamped(temp_c, -15.0, 40.0);
-        let col_hex = format!("#{:02X}{:02X}{:02X}", col.r, col.g, col.b);
+        let temp = Markup::text(format!(
+            "{:2.0}",
+            self.cfg.units.convert_from_celcius(temp_c)
+        ))
+        .fg(col);
 
-        format!(
-            "{}{}°{}",
-            wmo_code
-                .get_emoji()
-                .get_at(self.cfg.lat, self.cfg.lon, time),
-            color(
-                format!("{:2.0}", self.cfg.units.convert_from_celcius(temp_c)),
-                col_hex,
-            ),
-            self.cfg.units.suffix(),
-        )
+        Markup::text(emoji)
+            .append(temp)
+            .append(Markup::text(format!("°{}", self.cfg.units.suffix())))
     }
 
-    fn format_res_forecast(&self, res: Option<&OMHourlyForecast>) -> String {
+    fn format_res_forecast(&self, res: Option<&OMHourlyForecast>) -> Markup {
         let Some(res) = res else {
-            return format!("weather {}", color("forecast failed to load", BROWN));
+            return Markup::text(format!(
+                "weather {}",
+                color("forecast failed to load", BROWN)
+            ));
         };
         let times = get_wanted_forecast_datetimes();
         // exact matching should work fine here, everything is rounded
@@ -371,13 +375,18 @@ impl Weather {
             }
         }
 
-        let mut out = "weather ".to_string();
-        let mut with_times = Vec::new();
-        for (time, part) in &out_parts {
+        let mut out = Markup::text("weather ");
+        for (ix, (time, part)) in out_parts.into_iter().enumerate() {
+            if ix > 0 {
+                out = out.append(Markup::text("-"));
+            }
+
             let time_local = time.with_timezone(&chrono::Local);
-            with_times.push(format!("{:02}[{}]", time_local.hour(), part));
+            out = out
+                .append(Markup::text(format!("{:02}[", time_local.hour())))
+                .append(part)
+                .append(Markup::text("]"));
         }
-        out += with_times.join("-").as_str();
         out
     }
 }
@@ -415,10 +424,10 @@ impl Unit for Weather {
             )));
         };
 
-        crate::core::Readout::ok(Markup::text(match self.mode {
+        crate::core::Readout::ok(match self.mode {
             DisplayMode::Now => self.format_res_now(res.current.as_ref()),
             DisplayMode::Forecast => self.format_res_forecast(res.hourly.as_ref()),
-        }))
+        })
     }
     fn handle_click(&mut self, _click: crate::core::ClickEvent) {
         self.mode = DisplayMode::next(self.mode);

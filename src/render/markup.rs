@@ -24,6 +24,16 @@ impl Markup {
     }
 
     #[must_use]
+    pub fn fg(self, fg: crate::render::color::Srgb8) -> Self {
+        Self::styled(Style::default().fg(fg), self)
+    }
+
+    #[must_use]
+    pub fn bg(self, bg: crate::render::color::Srgb8) -> Self {
+        Self::styled(Style::default().bg(bg), self)
+    }
+
+    #[must_use]
     pub fn append(mut self, other: Self) -> Self {
         self.spans.extend(other.spans);
         self
