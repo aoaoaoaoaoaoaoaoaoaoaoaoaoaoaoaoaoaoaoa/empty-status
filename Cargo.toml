@@ -33,3 +33,4 @@ reqwest = { version = "0.12.22", features = ["json"] }
 spa = "0.5.1"
 serde_with = "3.14.1"
 palette = { version = "0.7", default-features = false, features = ["std"] }
+futures = "0.3.31"

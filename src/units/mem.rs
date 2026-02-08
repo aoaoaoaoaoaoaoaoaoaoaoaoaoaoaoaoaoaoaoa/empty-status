@@ -27,7 +27,7 @@ impl Mem {
             mode: DisplayMode::Totals,
         }
     }
-    fn read_formatted_totals() -> String {
+    fn read_formatted_totals() -> Markup {
         let mut sys = System::new();
         sys.refresh_memory();
 
@@ -40,18 +40,17 @@ impl Mem {
         let used_percent = used_frac * 100.0;
 
         let col = crate::render::color::Srgb8::from(color_by_pct(used_percent));
-        (Markup::text("mem ")
+        Markup::text("mem ")
             + Markup::bracketed(
                 Markup::text("used ")
                     + Markup::text(format!("{used_gib:>4.1}")).fg(col)
                     + Markup::text(" GiB (")
                     + Markup::text(format!("{used_percent:>2.0}")).fg(col)
                     + Markup::text("%)"),
-            ))
-        .to_string()
+            )
     }
 
-    fn read_formatted_worst_rss() -> String {
+    fn read_formatted_worst_rss() -> Markup {
         let mut sys = System::new();
         sys.refresh_processes(ProcessesToUpdate::All, true);
         sys.refresh_memory();
@@ -78,25 +77,24 @@ impl Mem {
             max_rss_rel,
             &[5.0, 10.0, 20.0, 50.0],
         ));
-        (Markup::text("mem ")
+        Markup::text("mem ")
             + Markup::bracketed(
                 Markup::text("worst ")
                     + Markup::text(max_name)
                     + Markup::text(": ")
                     + Markup::text(format!("{max_rss_gib:>2.3}")).fg(col)
                     + Markup::text(" GiB rss"),
-            ))
-        .to_string()
+            )
     }
 }
 
 #[async_trait]
 impl Unit for Mem {
     async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(Markup::text(match self.mode {
+        crate::core::Readout::ok(match self.mode {
             DisplayMode::Totals => Self::read_formatted_totals(),
             DisplayMode::WorstProcess => Self::read_formatted_worst_rss(),
-        }))
+        })
     }
     impl_handle_click_rotate_mode!();
 }

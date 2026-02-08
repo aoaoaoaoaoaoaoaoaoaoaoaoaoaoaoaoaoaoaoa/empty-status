@@ -38,7 +38,7 @@ impl Time {
         Local::now().format(&self.cfg.format).to_string()
     }
 
-    fn read_formatted_uptime(&self) -> String {
+    fn read_formatted_uptime(&self) -> Markup {
         let uptime = System::uptime();
         let load_avg = System::load_average();
         let ut_s = format_duration(f64::from(uptime.min(u32::MAX as u64) as u32));
@@ -51,21 +51,20 @@ impl Time {
             );
         }
 
-        (Markup::text("uptime ")
+        Markup::text("uptime ")
             + Markup::bracketed(Markup::text(ut_s))
             + Markup::text(" load ")
-            + Markup::bracketed(Markup::join("/", load_strings)))
-        .to_string()
+            + Markup::bracketed(Markup::join("/", load_strings))
     }
 }
 
 #[async_trait]
 impl Unit for Time {
     async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(Markup::text(match self.mode {
-            DisplayMode::DateTime => self.read_formatted_datetime(),
+        crate::core::Readout::ok(match self.mode {
+            DisplayMode::DateTime => self.read_formatted_datetime().into(),
             DisplayMode::Uptime => self.read_formatted_uptime(),
-        }))
+        })
     }
     impl_handle_click_rotate_mode!();
 }

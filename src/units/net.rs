@@ -44,7 +44,7 @@ struct RxTxRecord {
 #[derive(Debug)]
 pub struct Net {
     cfg: NetConfig,
-    mode: DisplayMode,
+    pub(crate) mode: DisplayMode,
     // stats
     rxtx: Option<RxTxRecord>,
     rx_ema: Ema<f64>,
@@ -157,7 +157,7 @@ impl Net {
         (median, mad)
     }
 
-    fn read_formatted_ping(&mut self) -> Markup {
+    pub(crate) fn read_formatted_ping(&mut self) -> Markup {
         self.refresh_ping_buffer();
         let prefix = Markup::text(format!(
             "net {} [ping {}] ",
@@ -193,7 +193,7 @@ impl Net {
     }
 
     // STATS
-    fn read_formatted_stats(&mut self) -> Markup {
+    pub(crate) fn read_formatted_stats(&mut self) -> Markup {
         let nets = Networks::new_with_refreshed_list();
         let Some(net) = nets.get(self.cfg.interface.as_str()) else {
             return Markup::text(format!("net {} ", self.cfg.interface))

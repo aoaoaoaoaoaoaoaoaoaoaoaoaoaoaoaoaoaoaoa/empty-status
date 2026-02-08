@@ -179,7 +179,7 @@ impl<'de> DeserializeAs<'de, DateTime<Utc>> for Rfc3339NoSecs {
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-struct OMCurrentWeather {
+pub(crate) struct OMCurrentWeather {
     #[serde(rename = "temperature_2m")]
     temp_c: f64,
     #[serde(rename = "weathercode")]
@@ -193,7 +193,7 @@ struct OMCurrentWeather {
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-struct OMHourlyForecast {
+pub(crate) struct OMHourlyForecast {
     #[serde(rename = "time")]
     #[serde_as(as = "Vec<Rfc3339NoSecs>")]
     times_utc: Vec<DateTime<Utc>>,
@@ -204,17 +204,17 @@ struct OMHourlyForecast {
 }
 
 #[derive(Debug, Deserialize)]
-struct OMResponseContainer {
-    current: Option<OMCurrentWeather>,
-    hourly: Option<OMHourlyForecast>,
+pub(crate) struct OMResponseContainer {
+    pub(crate) current: Option<OMCurrentWeather>,
+    pub(crate) hourly: Option<OMHourlyForecast>,
 }
 
 #[derive(Debug)]
 pub struct Weather {
     cfg: WeatherConfig,
-    mode: DisplayMode,
-    last_successful_poll: Option<Instant>,
-    res: Option<OMResponseContainer>,
+    pub(crate) mode: DisplayMode,
+    pub(crate) last_successful_poll: Option<Instant>,
+    pub(crate) res: Option<OMResponseContainer>,
 }
 
 /// Gets the next forecast times. These are always the next 4 "4-hour-round"
@@ -275,7 +275,7 @@ impl Weather {
         }
     }
 
-    async fn poll_weather(&mut self) -> Result<()> {
+    pub(crate) async fn poll_weather(&mut self) -> Result<()> {
         let base_url = format!(
             "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}",
             self.cfg.lat, self.cfg.lon
@@ -288,9 +288,9 @@ impl Weather {
             }
         };
 
-        self.res = None;
         let res = reqwest::get(&url).await?;
         tracing::info!("got res from open-meteo: {:?}", res);
+        let res = res.error_for_status()?;
         let res: OMResponseContainer = res.json().await?;
         self.res = Some(res);
         self.last_successful_poll = Some(Instant::now());
@@ -308,7 +308,7 @@ impl Weather {
         None
     }
 
-    fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> Markup {
+    pub(crate) fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> Markup {
         let Some(res) = res else {
             return Markup::text("weather ") + Markup::text("current failed to load").fg(BROWN);
         };
@@ -355,7 +355,7 @@ impl Weather {
             .append(Markup::text(format!("°{}", self.cfg.units.suffix())))
     }
 
-    fn format_res_forecast(&self, res: Option<&OMHourlyForecast>) -> Markup {
+    pub(crate) fn format_res_forecast(&self, res: Option<&OMHourlyForecast>) -> Markup {
         let Some(res) = res else {
             return Markup::text("weather ") + Markup::text("forecast failed to load").fg(BROWN);
         };

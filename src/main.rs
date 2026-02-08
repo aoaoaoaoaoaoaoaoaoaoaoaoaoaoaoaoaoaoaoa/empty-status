@@ -2,6 +2,7 @@
 mod config;
 mod core;
 mod display;
+mod machine;
 mod registry;
 mod render;
 mod units;
