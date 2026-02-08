@@ -35,6 +35,18 @@ impl std::fmt::Display for UnitErr {
 
 impl std::error::Error for UnitErr {}
 
+impl WeatherMachine {
+    fn fmt_err(err: &UnitErr) -> Markup {
+        let s = err.to_string();
+        if s.contains("429") {
+            return Markup::text("HTTP 429");
+        }
+        let mut s = s;
+        s.truncate(80);
+        Markup::text(s)
+    }
+}
+
 impl UnitMachine for WeatherMachine {
     type PollOut = ();
     type State = State;
@@ -111,6 +123,10 @@ impl UnitMachine for WeatherMachine {
             .poll_weather()
             .await
             .map_err(|e| UnitErr(e.to_string()))
+    }
+
+    fn render_unit_error(&self, err: &Self::UnitError) -> Markup {
+        Self::fmt_err(err)
     }
 
     fn on_poll_ok(

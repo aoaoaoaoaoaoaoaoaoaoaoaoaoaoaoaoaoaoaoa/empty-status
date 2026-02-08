@@ -28,8 +28,8 @@ fn make_chunk(i3_name: &str, padding: i32, view: &View) -> OutputChunk {
     chunk
 }
 
-fn render_poll_error(name: &str, err: &PollError<impl std::fmt::Display>) -> View {
-    let name = name.to_ascii_lowercase();
+fn render_poll_error<M: UnitMachine>(machine: &M, err: &PollError<M::UnitError>) -> View {
+    let name = machine.name().to_ascii_lowercase();
     let (health, body) = match err {
         PollError::Transport(TransportError::Timeout) => (
             Health::Error,
@@ -39,41 +39,32 @@ fn render_poll_error(name: &str, err: &PollError<impl std::fmt::Display>) -> Vie
             Health::Error,
             crate::render::markup::Markup::text(format!("{name}: {msg}")).fg(crate::core::RED),
         ),
-        PollError::Unit(e) => {
-            let msg = e.to_string();
-            let short = if msg.contains("429") {
-                "HTTP 429".to_string()
-            } else {
-                let mut s = msg;
-                s.truncate(80);
-                s
-            };
-            (
-                Health::Error,
-                crate::render::markup::Markup::text(format!("{name}: {short}"))
-                    .fg(crate::core::RED),
-            )
-        }
+        PollError::Unit(e) => (
+            Health::Error,
+            crate::render::markup::Markup::text(format!("{name}: "))
+                .fg(crate::core::RED)
+                .append(machine.render_unit_error(e).fg(crate::core::RED)),
+        ),
     };
 
     View { body, health }
 }
 
-fn render_availability<E: std::fmt::Display>(
-    name: &str,
-    availability: Availability<crate::render::markup::Markup, PollError<E>>,
+fn render_availability<M: UnitMachine>(
+    machine: &M,
+    availability: Availability<crate::render::markup::Markup, PollError<M::UnitError>>,
 ) -> View {
     match availability {
         Availability::Loading => View {
             body: crate::render::markup::Markup::text(format!(
                 "{} loading",
-                name.to_ascii_lowercase()
+                machine.name().to_ascii_lowercase()
             ))
             .fg(crate::core::VIOLET),
             health: Health::Degraded,
         },
         Availability::Ready(body) => View::ok(body),
-        Availability::Failed(err) => render_poll_error(name, &err),
+        Availability::Failed(err) => render_poll_error(machine, &err),
     }
 }
 
@@ -225,7 +216,7 @@ pub fn spawn_machine_actor<M: UnitMachine>(
                         Ok(v) => machine.on_poll_ok(&mut state, v),
                         Err(e) => (Availability::Failed(e), UnitDecision::Idle),
                     };
-                    let view = render_availability(machine.name(), availability);
+                    let view = render_availability(&*machine, availability);
                     let _ = view_tx.send(view);
                     if decision == UnitDecision::PollNow {
                         next_poll = tokio::time::Instant::now();

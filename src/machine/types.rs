@@ -95,6 +95,10 @@ pub(crate) trait UnitMachine: Send + Sync + std::fmt::Debug + 'static {
         state: &mut Self::State,
     ) -> impl std::future::Future<Output = Result<Self::PollOut, Self::UnitError>> + Send;
 
+    fn render_unit_error(&self, err: &Self::UnitError) -> Markup {
+        Markup::text(err.to_string())
+    }
+
     fn on_poll_ok(
         &self,
         state: &mut Self::State,
