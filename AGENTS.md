@@ -17,3 +17,7 @@ Local workflow helpers:
 
 - `python3 scripts/check.py`
 - `python3 scripts/install.py` (wraps `cargo install --release --path . --root ~/.local`; installs into `~/.local/bin`)
+
+Docs policy:
+
+- `config.example.toml` must be updated alongside any config/schema changes.

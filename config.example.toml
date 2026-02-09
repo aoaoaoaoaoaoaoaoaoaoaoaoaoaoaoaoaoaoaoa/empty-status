@@ -1,0 +1,82 @@
+# `empty-status` config example (complete).
+#
+# This file is normative: all fields are present and set to their current
+# default values. Keep it updated when config schemas change.
+#
+# Config file location:
+# - `$XDG_CONFIG_HOME/empty-status/config.toml`
+# - defaults to `~/.config/empty-status/config.toml`
+#
+# Units appear on the bar in the same order as they are defined here.
+# Topmost is rightmost.
+
+[global]
+# Minimum tick interval for the runtime output loop (seconds).
+min_polling_interval = 0.25
+# Padding spaces around each unit.
+padding = 1
+
+[[units]]
+type = "Weather"
+# Unit poll interval (seconds).
+poll_interval = 0.333
+# Latitude/longitude for forecast location.
+lat = 0.0
+lon = 0.0
+# Poll refresh interval (seconds).
+refresh_interval_sec = 60.0
+# Temperature units: "celsius" | "fahrenheit"
+units = "celsius"
+
+[[units]]
+type = "Time"
+poll_interval = 0.333
+# `chrono` format string.
+format = "%a %b %d %Y - %H:%M"
+
+[[units]]
+type = "Cpu"
+poll_interval = 0.333
+
+[[units]]
+type = "Mem"
+poll_interval = 0.333
+
+[[units]]
+type = "Disk"
+poll_interval = 0.333
+# Disk name (e.g. "nvme0n1p1"). Used unless `partlabel`/`partuuid` are set.
+disk = "nvme0n1p1"
+# Optional stable selectors; if set, `disk` is resolved at runtime.
+# Use TOML absence for "unset" (omit these keys).
+# partlabel = "ROOT"
+# partuuid = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# EMA smoothing window (seconds).
+smoothing_sec = 0.5
+# Reference peak write/read throughput for the bar quantization (bytes/sec).
+write_peak_ref = 300000000.0
+read_peak_ref = 1500000000.0
+
+[[units]]
+type = "Wifi"
+poll_interval = 0.333
+interface = "wlan0"
+
+[[units]]
+type = "Bat"
+poll_interval = 0.333
+# Battery index (BAT0, BAT1, ...)
+bat_id = 0
+# EMA smoothing for power draw (seconds).
+power_smoothing_sec = 2.5
+
+[[units]]
+type = "Net"
+poll_interval = 0.333
+interface = "eth0"
+# Bandwidth EMA smoothing window (seconds).
+smoothing_window_sec = 0.333
+# Ping target used in ping mode.
+ping_server = "8.8.8.8"
+# Ping sample window size.
+ping_window = 25
