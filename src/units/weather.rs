@@ -1,25 +1,34 @@
 // TODO start splitting up into optionals, the dep tree is getting fat
 // TODO phases of the moon!
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, TimeZone, Timelike, Utc};
 use palette::FromColor;
+use reqwest::Url;
 use serde::{Deserialize, Deserializer};
 use serde_inline_default::serde_inline_default;
 use serde_repr::Deserialize_repr;
 use serde_with::{serde_as, DeserializeAs};
 use std::time::Instant;
 
+use crate::machine::effects::{EffectReq, HttpCacheKey, HttpGet, HttpPolicy};
 use crate::{
-    core::{Unit, BROWN, VIOLET},
-    mode_enum, register_unit,
+    core::{BROWN, VIOLET},
+    mode_enum,
 };
-use reqwest;
 
 use crate::render::color::{Gradient, Srgb8, Stop};
 use crate::render::markup::Markup;
 
 mode_enum!(Now, Forecast);
+
+impl std::fmt::Display for DisplayMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DisplayMode::Now => f.write_str("now"),
+            DisplayMode::Forecast => f.write_str("forecast"),
+        }
+    }
+}
 
 const MIN_REFRESH_INTERVAL: f64 = 15.0;
 
@@ -211,9 +220,10 @@ pub(crate) struct OMResponseContainer {
 
 #[derive(Debug)]
 pub struct Weather {
-    cfg: WeatherConfig,
+    pub(crate) cfg: WeatherConfig,
     pub(crate) mode: DisplayMode,
     pub(crate) last_successful_poll: Option<Instant>,
+    pub(crate) last_attempt_poll: Option<Instant>,
     pub(crate) res: Option<OMResponseContainer>,
 }
 
@@ -251,61 +261,104 @@ fn get_wanted_forecast_datetimes() -> Vec<DateTime<Utc>> {
     out
 }
 
-#[cfg(test)]
-mod forecast_tests {
-    use super::get_wanted_forecast_datetimes;
-
-    #[test]
-    fn forecast_times_monotone_utc() {
-        let times = get_wanted_forecast_datetimes();
-        assert!(times.len() >= 4);
-        for w in times.windows(2) {
-            assert!(w[0] < w[1]);
-        }
-    }
-}
-
 impl Weather {
     pub fn from_cfg(cfg: WeatherConfig) -> Self {
         Self {
             cfg,
             mode: DisplayMode::Now,
             last_successful_poll: None,
+            last_attempt_poll: None,
             res: None,
         }
     }
 
-    pub(crate) async fn poll_weather(&mut self) -> Result<()> {
-        let base_url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}",
-            self.cfg.lat, self.cfg.lon
-        );
+    const MIN_OPEN_METEO_INTERVAL: f64 = 60.0;
 
-        let url = match self.mode {
-            DisplayMode::Now => base_url + "&current=temperature_2m,weathercode",
-            DisplayMode::Forecast => {
-                base_url + "&hourly=temperature_2m,weathercode&forecast_days=2"
+    pub(crate) async fn poll_weather(
+        &mut self,
+        effects: &crate::machine::effects::EffectEngine,
+    ) -> Result<(), crate::machine::types::PollError<WeatherError>> {
+        let mut url = Url::parse("https://api.open-meteo.com/v1/forecast")
+            .map_err(|e| crate::machine::types::PollError::Unit(WeatherError(e.to_string())))?;
+        {
+            let mut qp = url.query_pairs_mut();
+            qp.append_pair("latitude", &format!("{:.4}", self.cfg.lat));
+            qp.append_pair("longitude", &format!("{:.4}", self.cfg.lon));
+            match self.mode {
+                DisplayMode::Now => {
+                    qp.append_pair("current", "temperature_2m,weathercode");
+                }
+                DisplayMode::Forecast => {
+                    qp.append_pair("hourly", "temperature_2m,weathercode");
+                    qp.append_pair("forecast_days", "2");
+                }
             }
+        }
+
+        let key = HttpCacheKey::new(format!(
+            "open-meteo:{}:{:.4}:{:.4}",
+            self.mode, self.cfg.lat, self.cfg.lon
+        ));
+        let min_interval = self
+            .cfg
+            .refresh_interval_sec
+            .max(Self::MIN_OPEN_METEO_INTERVAL);
+        let policy = HttpPolicy {
+            // Conservative: stay well below free-tier caps.
+            rate: crate::machine::http::RateLimitSpec {
+                per: std::time::Duration::from_secs_f64(min_interval),
+                burst: 1,
+            },
+            cache_fresh_for: std::time::Duration::from_secs_f64(min_interval),
         };
 
-        let res = reqwest::get(&url).await?;
-        tracing::info!("got res from open-meteo: {:?}", res);
-        let res = res.error_for_status()?;
-        let res: OMResponseContainer = res.json().await?;
+        let out = effects
+            .run(EffectReq::HttpGet(HttpGet { key, url, policy }))
+            .await
+            .map_err(crate::machine::types::PollError::Transport)?;
+
+        let body = out
+            .expect::<crate::machine::effects::HttpResponse>()
+            .map_err(|e| crate::machine::types::PollError::Unit(WeatherError(e.to_string())))?
+            .body;
+
+        let res: OMResponseContainer = serde_json::from_slice(&body)
+            .map_err(|e| crate::machine::types::PollError::Unit(WeatherError(e.to_string())))?;
         self.res = Some(res);
         self.last_successful_poll = Some(Instant::now());
         Ok(())
     }
 
-    async fn do_poll_if_needed(&mut self) -> Option<String> {
-        if self.last_successful_poll.is_none_or(|last| {
-            Instant::now().duration_since(last).as_secs_f64() > self.cfg.refresh_interval_sec
+    async fn do_poll_if_needed(
+        &mut self,
+        effects: &crate::machine::effects::EffectEngine,
+    ) -> Result<(), crate::machine::types::PollError<WeatherError>> {
+        let now = Instant::now();
+        let min_interval = self
+            .cfg
+            .refresh_interval_sec
+            .max(Self::MIN_OPEN_METEO_INTERVAL);
+
+        if self.last_successful_poll.is_some_and(|last| {
+            now.duration_since(last).as_secs_f64() <= self.cfg.refresh_interval_sec
         }) {
-            if let Err(e) = self.poll_weather().await {
-                return format!("weather error: {e}").into();
-            }
+            return Ok(());
         }
-        None
+
+        if self
+            .last_attempt_poll
+            .is_some_and(|last| now.duration_since(last).as_secs_f64() < min_interval)
+        {
+            return Ok(());
+        }
+
+        self.last_attempt_poll = Some(now);
+        if self.last_successful_poll.is_none_or(|last| {
+            now.duration_since(last).as_secs_f64() > self.cfg.refresh_interval_sec
+        }) {
+            self.poll_weather(effects).await?;
+        }
+        Ok(())
     }
 
     pub(crate) fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> Markup {
@@ -384,9 +437,8 @@ impl Weather {
     }
 }
 
-#[async_trait]
-impl Unit for Weather {
-    fn fix_up_and_validate(&mut self) -> anyhow::Result<()> {
+impl Weather {
+    pub fn fix_up_and_validate(&mut self) -> anyhow::Result<()> {
         let cfg = &mut self.cfg;
         if cfg.refresh_interval_sec < MIN_REFRESH_INTERVAL {
             tracing::warn!(
@@ -406,25 +458,36 @@ impl Unit for Weather {
         );
         Ok(())
     }
-    async fn read_formatted(&mut self) -> crate::core::Readout {
-        if let Some(err) = self.do_poll_if_needed().await {
-            return crate::core::Readout::err(Markup::text(err));
-        }
+
+    pub async fn read_markup(
+        &mut self,
+        effects: &crate::machine::effects::EffectEngine,
+    ) -> Result<Markup, crate::machine::types::PollError<WeatherError>> {
+        self.do_poll_if_needed(effects).await?;
         let Some(ref res) = self.res else {
-            return crate::core::Readout::warn(
-                Markup::text("weather ") + Markup::text("loading").fg(VIOLET),
-            );
+            return Ok(Markup::text("weather ") + Markup::text("loading").fg(VIOLET));
         };
 
-        crate::core::Readout::ok(match self.mode {
+        Ok(match self.mode {
             DisplayMode::Now => self.format_res_now(res.current.as_ref()),
             DisplayMode::Forecast => self.format_res_forecast(res.hourly.as_ref()),
         })
     }
-    fn handle_click(&mut self, _click: crate::core::ClickEvent) {
+
+    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
         self.mode = DisplayMode::next(self.mode);
         self.last_successful_poll = None;
+        self.last_attempt_poll = None;
     }
 }
 
-register_unit!(Weather, WeatherConfig);
+#[derive(Debug, Clone)]
+pub(crate) struct WeatherError(pub String);
+
+impl std::fmt::Display for WeatherError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for WeatherError {}

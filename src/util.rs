@@ -5,22 +5,6 @@ use std::{
 };
 
 #[macro_export]
-macro_rules! impl_handle_click_nop {
-    () => {
-        fn handle_click(&mut self, _click: $crate::core::ClickEvent) {}
-    };
-}
-
-#[macro_export]
-macro_rules! impl_handle_click_rotate_mode {
-    () => {
-        fn handle_click(&mut self, _click: $crate::core::ClickEvent) {
-            self.mode = DisplayMode::next(self.mode);
-        }
-    };
-}
-
-#[macro_export]
 macro_rules! mode_enum {
     ( $($member:ident),* $(,)? ) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, empty_status_macros::RotateNext)]

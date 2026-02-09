@@ -1,9 +1,10 @@
 #![cfg(target_os = "linux")]
 mod config;
+#[cfg(test)]
+mod config_tests;
 mod core;
 mod display;
 mod machine;
-mod registry;
 mod render;
 mod units;
 mod util;
@@ -17,8 +18,6 @@ use tracing_appender::{
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::config::load_status_from_cfg;
-
-inventory::collect!(crate::registry::UnitFactory);
 
 fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
     let bd = xdg::BaseDirectories::with_prefix("empty-status");

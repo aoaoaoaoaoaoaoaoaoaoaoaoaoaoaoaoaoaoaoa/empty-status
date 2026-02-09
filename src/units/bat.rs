@@ -1,15 +1,12 @@
-use crate::core::{Unit, BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
+use crate::core::{BLUE, CYAN, GREEN, ORANGE, RED, VIOLET};
 use crate::display::color_by_pct_rev;
+use crate::mode_enum;
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
-use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 use anyhow::Result;
-use async_trait::async_trait;
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 mode_enum!(CurCapacity, DesignCapacity);
@@ -78,12 +75,10 @@ impl Bat {
         }
     }
 
-    fn parse_uevent(&self) -> Result<HashMap<String, String>> {
-        let file = File::open(&self.uevent_path)?;
-        let reader = BufReader::new(file);
+    fn parse_uevent_bytes(bytes: &[u8]) -> Result<HashMap<String, String>> {
         let mut out = HashMap::new();
-        for line in reader.lines() {
-            let line = line?;
+        let s = std::str::from_utf8(bytes)?;
+        for line in s.lines() {
             if let Some((k, v)) = line.trim().split_once('=') {
                 let key = k
                     .strip_prefix("POWER_SUPPLY_")
@@ -170,11 +165,10 @@ impl BatteryInfo {
     }
 }
 
-#[async_trait]
-impl Unit for Bat {
-    async fn read_formatted(&mut self) -> crate::core::Readout {
+impl Bat {
+    pub fn read_markup_from_bytes(&mut self, bytes: &[u8]) -> Markup {
         let mut missing = false;
-        let uevent = if let Ok(map) = self.parse_uevent() {
+        let uevent = if let Ok(map) = Self::parse_uevent_bytes(bytes) {
             map
         } else {
             missing = true;
@@ -182,14 +176,14 @@ impl Unit for Bat {
         };
 
         if missing || uevent.get("present").is_some_and(|v| v == "0") {
-            return crate::core::Readout::err(Markup::text("No battery").fg(RED));
+            return Markup::text("No battery").fg(RED);
         }
 
         let bi =
             match BatteryInfo::from_charge(&uevent).or_else(|| BatteryInfo::from_energy(&uevent)) {
                 Some(bi) => bi,
                 None => {
-                    return crate::core::Readout::err(Markup::text("invalid data").fg(RED));
+                    return Markup::text("invalid data").fg(RED);
                 }
             };
 
@@ -246,20 +240,25 @@ impl Unit for Bat {
             DisplayMode::CurCapacity => ("[", "]"),
             DisplayMode::DesignCapacity => ("&lt;", "&gt;"),
         };
-        crate::core::Readout::ok(
-            Markup::text("bat ")
-                .append(Markup::delimited(
-                    br0,
-                    pct_str.append(Markup::text("%")),
-                    br1,
-                ))
-                .append(Markup::text(" "))
-                .append(bs.state_markup())
-                .append(Markup::text(format!(" {p_smooth:2.2} W ")))
-                .append(Markup::bracketed(Markup::text(format!("{rem_string} rem")))),
-        )
+        Markup::text("bat ")
+            .append(Markup::delimited(
+                br0,
+                pct_str.append(Markup::text("%")),
+                br1,
+            ))
+            .append(Markup::text(" "))
+            .append(bs.state_markup())
+            .append(Markup::text(format!(" {p_smooth:2.2} W ")))
+            .append(Markup::bracketed(Markup::text(format!("{rem_string} rem"))))
     }
-    impl_handle_click_rotate_mode!();
-}
 
-register_unit!(Bat, BatConfig);
+    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
+        self.mode = DisplayMode::next(self.mode);
+    }
+
+    pub fn fix_up_and_validate() {}
+
+    pub fn uevent_path(&self) -> &str {
+        &self.uevent_path
+    }
+}

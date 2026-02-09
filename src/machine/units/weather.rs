@@ -1,7 +1,6 @@
-use crate::core::Unit;
 use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
 use crate::render::markup::Markup;
-use crate::units::weather::{Weather, WeatherConfig};
+use crate::units::weather::{Weather, WeatherConfig, WeatherError};
 
 #[derive(Debug, Clone)]
 pub struct WeatherMachine {
@@ -37,18 +36,14 @@ impl std::error::Error for UnitErr {}
 
 impl WeatherMachine {
     fn fmt_err(err: &UnitErr) -> Markup {
-        let s = err.to_string();
-        if s.contains("429") {
-            return Markup::text("HTTP 429");
-        }
-        let mut s = s;
+        let mut s = err.to_string();
         s.truncate(80);
         Markup::text(s)
     }
 }
 
 impl UnitMachine for WeatherMachine {
-    type PollOut = ();
+    type PollOut = Markup;
     type State = State;
     type UnitError = UnitErr;
 
@@ -117,12 +112,19 @@ impl UnitMachine for WeatherMachine {
         (Some(view), UnitDecision::PollNow)
     }
 
-    async fn poll(&self, state: &mut Self::State) -> Result<Self::PollOut, Self::UnitError> {
-        state
-            .unit
-            .poll_weather()
-            .await
-            .map_err(|e| UnitErr(e.to_string()))
+    async fn poll(
+        &self,
+        effects: &crate::machine::effects::EffectEngine,
+        state: &mut Self::State,
+    ) -> Result<Self::PollOut, crate::machine::types::PollError<Self::UnitError>> {
+        state.unit.read_markup(effects).await.map_err(|e| match e {
+            crate::machine::types::PollError::Transport(t) => {
+                crate::machine::types::PollError::Transport(t)
+            }
+            crate::machine::types::PollError::Unit(WeatherError(msg)) => {
+                crate::machine::types::PollError::Unit(UnitErr(msg))
+            }
+        })
     }
 
     fn render_unit_error(&self, err: &Self::UnitError) -> Markup {
@@ -132,29 +134,19 @@ impl UnitMachine for WeatherMachine {
     fn on_poll_ok(
         &self,
         state: &mut Self::State,
-        (): Self::PollOut,
+        body: Self::PollOut,
     ) -> (
         Availability<Markup, crate::machine::types::PollError<Self::UnitError>>,
         UnitDecision,
     ) {
-        state.unit.last_successful_poll = Some(std::time::Instant::now());
-        if let Some(cur) = state.unit.res.as_ref().and_then(|r| r.current.as_ref()) {
-            state.last_view_now = Some(state.unit.format_res_now(Some(cur)));
+        // `read_markup()` already applied caching/poll-if-needed and rendered the correct mode.
+        // We keep the per-mode last views only for click-time instantaneous toggling.
+        match state.unit.mode {
+            crate::units::weather::DisplayMode::Now => state.last_view_now = Some(body.clone()),
+            crate::units::weather::DisplayMode::Forecast => {
+                state.last_view_forecast = Some(body.clone());
+            }
         }
-        if let Some(hr) = state.unit.res.as_ref().and_then(|r| r.hourly.as_ref()) {
-            state.last_view_forecast = Some(state.unit.format_res_forecast(Some(hr)));
-        }
-
-        let body = match state.unit.mode {
-            crate::units::weather::DisplayMode::Now => state
-                .last_view_now
-                .clone()
-                .unwrap_or_else(|| state.unit.format_res_now(None)),
-            crate::units::weather::DisplayMode::Forecast => state
-                .last_view_forecast
-                .clone()
-                .unwrap_or_else(|| state.unit.format_res_forecast(None)),
-        };
 
         (Availability::Ready(body), UnitDecision::Idle)
     }

@@ -1,8 +1,7 @@
 use crate::display::color_by_pct_custom;
+use crate::display::format_duration;
 use crate::mode_enum;
 use crate::render::markup::Markup;
-use crate::{core::Unit, display::format_duration, impl_handle_click_rotate_mode, register_unit};
-use async_trait::async_trait;
 use chrono::Local;
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
@@ -56,17 +55,17 @@ impl Time {
             + Markup::text(" load ")
             + Markup::bracketed(Markup::join("/", load_strings))
     }
-}
 
-#[async_trait]
-impl Unit for Time {
-    async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(match self.mode {
+    pub fn read_markup(&self) -> Markup {
+        match self.mode {
             DisplayMode::DateTime => self.read_formatted_datetime().into(),
             DisplayMode::Uptime => self.read_formatted_uptime(),
-        })
+        }
     }
-    impl_handle_click_rotate_mode!();
-}
 
-register_unit!(Time, TimeConfig);
+    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
+        self.mode = DisplayMode::next(self.mode);
+    }
+
+    pub fn fix_up_and_validate() {}
+}

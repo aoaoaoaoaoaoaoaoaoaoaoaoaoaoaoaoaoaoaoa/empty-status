@@ -1,10 +1,9 @@
 use crate::{
-    core::{Unit, BROWN, GREEN, RED, VIOLET},
+    core::{BROWN, GREEN, RED, VIOLET},
     display::color_by_pct_rev,
-    impl_handle_click_rotate_mode, mode_enum, register_unit,
+    mode_enum,
     render::markup::Markup,
 };
-use async_trait::async_trait;
 use neli_wifi::Socket;
 use serde::Deserialize;
 
@@ -30,13 +29,10 @@ impl Wifi {
     }
 }
 
-#[async_trait]
-impl Unit for Wifi {
-    async fn read_formatted(&mut self) -> crate::core::Readout {
+impl Wifi {
+    pub fn read_markup(&self) -> Markup {
         let Ok(mut sock) = Socket::connect() else {
-            return crate::core::Readout::err(
-                Markup::text("wifi ") + Markup::text("no netlink").fg(VIOLET),
-            );
+            return Markup::text("wifi ") + Markup::text("no netlink").fg(VIOLET);
         };
 
         let Some(interface) = sock.get_interfaces_info().ok().and_then(|v| {
@@ -48,10 +44,8 @@ impl Unit for Wifi {
                     == Some(self.cfg.interface.as_str())
             })
         }) else {
-            return crate::core::Readout::err(
-                Markup::text(format!("wifi {} ", self.cfg.interface))
-                    + Markup::text("gone").fg(BROWN),
-            );
+            return Markup::text(format!("wifi {} ", self.cfg.interface))
+                + Markup::text("gone").fg(BROWN);
         };
 
         let Some(station) = sock
@@ -59,7 +53,7 @@ impl Unit for Wifi {
             .ok()
             .and_then(|mut v| v.pop())
         else {
-            return crate::core::Readout::err(Markup::text("wifi ") + Markup::text("down").fg(RED));
+            return Markup::text("wifi ") + Markup::text("down").fg(RED);
         };
 
         // linear remap −80 dBm→0 %, −30 dBm→100 %
@@ -83,10 +77,12 @@ impl Unit for Wifi {
             DisplayMode::HideSsid => Markup::text(" "),
         };
 
-        crate::core::Readout::ok(Markup::text("wifi") + ssid_str + pct_str)
+        Markup::text("wifi") + ssid_str + pct_str
     }
 
-    impl_handle_click_rotate_mode!();
-}
+    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
+        self.mode = DisplayMode::next(self.mode);
+    }
 
-register_unit!(Wifi, WifiConfig);
+    pub fn fix_up_and_validate() {}
+}

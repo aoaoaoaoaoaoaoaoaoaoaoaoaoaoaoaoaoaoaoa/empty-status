@@ -1,14 +1,9 @@
-use crate::core::{Unit, BLUE, BROWN, ORANGE};
+use crate::core::{BLUE, BROWN, ORANGE, VIOLET};
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
-use crate::{impl_handle_click_nop, register_unit};
-use anyhow::Result;
-use async_trait::async_trait;
 use cute::c;
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
-use std::fs::{read_dir, read_to_string, File};
-use std::io::Read;
 use std::time::Instant;
 use tracing::info;
 const BARS: &[&str; 9] = &[" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
@@ -17,6 +12,10 @@ const BARS: &[&str; 9] = &[" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇",
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiskConfig {
     disk: String,
+    #[serde(default)]
+    partlabel: Option<String>,
+    #[serde(default)]
+    partuuid: Option<String>,
 
     #[serde_inline_default(0.5)]
     smoothing_sec: f64,
@@ -31,8 +30,10 @@ pub struct DiskConfig {
 #[derive(Debug)]
 pub struct Disk {
     cfg: DiskConfig,
-    stat_path: String,
     sector_size: Option<u64>,
+    root: Option<String>,
+    name: Option<String>,
+    initialized: bool,
     write_ema: Ema<f64>,
     read_ema: Ema<f64>,
     read_threshs: Vec<f64>,
@@ -44,12 +45,14 @@ pub struct Disk {
 
 impl Disk {
     pub fn from_cfg(cfg: DiskConfig) -> Self {
-        let stat_path = format!("/sys/class/block/{}/stat", cfg.disk);
         // TODO evetually we'll make these Results and handle construction with toml config
-        let sector_size = Self::get_sector_size(&cfg.disk);
-        let (last_r, last_w): (u64, u64) = sector_size
-            .and_then(|ss| Self::read_rw(&stat_path, ss).ok())
-            .unwrap_or((0, 0));
+        let sector_size = None;
+        let (last_r, last_w): (u64, u64) = (0, 0);
+        let name = if cfg.partlabel.is_none() && cfg.partuuid.is_none() {
+            Some(cfg.disk.clone())
+        } else {
+            None
+        };
 
         let read_threshs = c![cfg.read_peak_ref.powf(i as f64 /9.0), for i in 1..10];
         info!("computed read thresholds: {:?}", read_threshs);
@@ -57,8 +60,10 @@ impl Disk {
         info!("computed write thresholds: {:?}", write_threshs);
 
         Self {
-            stat_path,
             sector_size,
+            root: None,
+            name,
+            initialized: false,
             write_ema: Ema::new(cfg.smoothing_sec),
             read_ema: Ema::new(cfg.smoothing_sec),
             read_threshs,
@@ -70,52 +75,107 @@ impl Disk {
         }
     }
 
-    fn get_sector_size(disk: &str) -> Option<u64> {
-        let dir_list = read_dir("/sys/block").ok()?;
-        let best = dir_list
-            .filter_map(Result::ok)
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|name| disk.starts_with(name))
-            .max_by_key(String::len)?;
-
-        let out = read_to_string(format!("/sys/block/{best}/queue/hw_sector_size"))
-            .ok()?
-            .trim()
-            .parse::<u64>()
-            .unwrap_or(512);
-
-        Some(out)
+    fn parse_stat(buf: &str, sector_size: u64) -> Option<(u64, u64)> {
+        let spl: Vec<&str> = buf.split_whitespace().collect();
+        let r = spl.get(2).and_then(|s| s.parse::<u64>().ok())? * sector_size;
+        let w = spl.get(6).and_then(|s| s.parse::<u64>().ok())? * sector_size;
+        Some((r, w))
     }
 
-    fn read_rw(stat_path: &str, sector_size: u64) -> Result<(u64, u64)> {
-        let mut f = File::open(stat_path)?;
-        let mut buf = String::new();
-        f.read_to_string(&mut buf)?;
-        let spl: Vec<&str> = buf.split_whitespace().collect();
-        let r = spl.get(2).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0) * sector_size;
-        let w = spl.get(6).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0) * sector_size;
-        Ok((r, w))
+    pub fn select_root(&mut self, entries: &[String]) {
+        if self.root.is_some() {
+            return;
+        }
+        let Some(disk_name) = self.name.as_ref() else {
+            return;
+        };
+        self.root = entries
+            .iter()
+            .filter(|name| disk_name.starts_with(*name))
+            .max_by_key(|name| name.len())
+            .cloned();
+    }
+
+    pub fn set_sector_size(&mut self, size: Option<u64>) {
+        if self.sector_size.is_none() {
+            self.sector_size = size;
+        }
+    }
+
+    pub fn disk_root(&self) -> Option<&str> {
+        self.root.as_deref()
+    }
+
+    pub fn disk_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn set_disk_name(&mut self, name: String) {
+        if self.name.is_none() {
+            self.name = Some(name);
+        }
+    }
+
+    pub fn display_name(&self) -> &str {
+        if let Some(label) = self.cfg.partlabel.as_deref() {
+            return label;
+        }
+        if let Some(uuid) = self.cfg.partuuid.as_deref() {
+            return uuid;
+        }
+        &self.cfg.disk
+    }
+
+    pub fn selector_partlabel(&self) -> Option<&str> {
+        self.cfg.partlabel.as_deref()
+    }
+
+    pub fn selector_partuuid(&self) -> Option<&str> {
+        self.cfg.partuuid.as_deref()
     }
 }
 
-#[async_trait]
-impl Unit for Disk {
-    async fn read_formatted(&mut self) -> crate::core::Readout {
+impl Disk {
+    pub fn read_markup_from_bytes(
+        &mut self,
+        stat_bytes: &[u8],
+        sector_size_bytes: Option<&[u8]>,
+    ) -> Markup {
+        if self.name.is_none() {
+            return Markup::text(format!("disk {} ", self.display_name()))
+                .append(Markup::text("resolving").fg(VIOLET));
+        }
+
+        if self.sector_size.is_none() {
+            let size = sector_size_bytes.and_then(|bytes| {
+                std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+            });
+            self.set_sector_size(size.or(Some(512)));
+        }
+
         let Some(sector_size) = self.sector_size else {
-            return crate::core::Readout::err(
-                Markup::text(format!("disk {} ", self.cfg.disk))
-                    .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN))),
-            );
+            return Markup::text(format!("disk {} ", self.display_name()))
+                .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN)));
         };
 
-        let Some((r, w)) = Self::read_rw(&self.stat_path, sector_size).ok() else {
-            return crate::core::Readout::err(
-                Markup::text(format!("disk {} ", self.cfg.disk))
-                    .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN))),
-            );
+        let buf = std::str::from_utf8(stat_bytes).unwrap_or_default();
+        let Some((r, w)) = Self::parse_stat(buf, sector_size) else {
+            return Markup::text(format!("disk {} ", self.display_name()))
+                .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN)));
         };
 
         let now = Instant::now();
+        if !self.initialized {
+            self.initialized = true;
+            self.last_r = r;
+            self.last_w = w;
+            self.last_t = now;
+            return Markup::text(format!("disk {} ", self.display_name()))
+                .append(Markup::text("loading").fg(VIOLET));
+        }
+
         let dt = now.duration_since(self.last_t).as_secs_f64();
         let dr = r.saturating_sub(self.last_r);
         let dw = w.saturating_sub(self.last_w);
@@ -139,16 +199,14 @@ impl Unit for Disk {
             .position(|&t| *bps_write < t)
             .unwrap_or(BARS.len() - 1)];
 
-        crate::core::Readout::ok(
-            Markup::text(format!("disk {} ", self.cfg.disk)).append(Markup::bracketed(
-                Markup::text(r_bar)
-                    .fg(BLUE)
-                    .append(Markup::text(w_bar).fg(ORANGE)),
-            )),
-        )
+        Markup::text(format!("disk {} ", self.display_name())).append(Markup::bracketed(
+            Markup::text(r_bar)
+                .fg(BLUE)
+                .append(Markup::text(w_bar).fg(ORANGE)),
+        ))
     }
 
-    impl_handle_click_nop!();
-}
+    pub fn handle_click(_click: crate::core::ClickEvent) {}
 
-register_unit!(Disk, DiskConfig);
+    pub fn fix_up_and_validate() {}
+}

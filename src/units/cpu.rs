@@ -1,15 +1,12 @@
 use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use sysinfo::Components;
 
-use crate::core::{Unit, BROWN, VIOLET};
+use crate::core::{BROWN, VIOLET};
 use crate::display::{color_by_pct, color_by_pct_custom};
+use crate::mode_enum;
 use crate::render::markup::Markup;
-use crate::{impl_handle_click_rotate_mode, mode_enum, register_unit};
 
 mode_enum!(Combined, Breakdown);
 
@@ -32,64 +29,36 @@ const KNOWN_CPU_HWMON_NAMES: &[&str] = &[
 
 impl Cpu {
     pub fn from_cfg(_cfg: CpuConfig) -> Self {
-        let (total, user, kernel) = Self::read_cpu_times().unwrap_or((0, 0, 0));
-
         Self {
             mode: DisplayMode::Combined,
-            prev_total: total,
-            prev_user: user,
-            prev_kernel: kernel,
+            prev_total: 0,
+            prev_user: 0,
+            prev_kernel: 0,
         }
     }
 
-    fn read_cpu_times() -> Result<(u64, u64, u64)> {
-        let file = File::open("/proc/stat")?;
-        let mut reader = BufReader::new(file);
-        let mut line = String::new();
-
-        reader.read_line(&mut line)?;
+    pub fn read_markup_from_proc_stat(&mut self, proc_stat: &[u8]) -> Markup {
+        let line = std::str::from_utf8(proc_stat)
+            .ok()
+            .and_then(|s| s.lines().next())
+            .unwrap_or_default();
 
         let parts: Vec<u64> = line
             .split_whitespace()
-            .skip(1) // Skip "cpu" prefix
+            .skip(1)
             .filter_map(|s| s.parse::<u64>().ok())
             .collect();
-
         if parts.len() < 4 {
-            return Err(anyhow!("Invalid CPU stat format"));
+            return Markup::text("read err").fg(BROWN);
         }
 
         let total: u64 = parts.iter().sum();
-        let user = parts[0] + parts[1]; // user + nice
-        let kernel = parts[2]; // system
-
-        Ok((total, user, kernel))
+        let user = parts[0] + parts[1];
+        let kernel = parts[2];
+        self.read_markup_from_times(total, user, kernel)
     }
 
-    fn read_temp() -> Result<f64> {
-        let cs = Components::new_with_refreshed_list();
-        for component in &cs {
-            if let Some((name, _)) = &component.label().split_once(' ') {
-                if KNOWN_CPU_HWMON_NAMES.contains(name) {
-                    if let Some(temp) = component.temperature() {
-                        return Ok(temp as f64);
-                    }
-                }
-            }
-        }
-        Err(anyhow!("No temperature sensors found in components"))
-    }
-}
-#[async_trait]
-impl Unit for Cpu {
-    async fn read_formatted(&mut self) -> crate::core::Readout {
-        let (total, user, kernel) = match Self::read_cpu_times() {
-            Ok(times) => times,
-            Err(_) => {
-                return crate::core::Readout::err(Markup::text("read err").fg(BROWN));
-            }
-        };
-
+    fn read_markup_from_times(&mut self, total: u64, user: u64, kernel: u64) -> Markup {
         let d_total = total.saturating_sub(self.prev_total) as f64;
         let d_user = user.saturating_sub(self.prev_user) as f64;
         let d_kernel = kernel.saturating_sub(self.prev_kernel) as f64;
@@ -125,15 +94,29 @@ impl Unit for Cpu {
             Markup::text("load ")
                 .append(Markup::text(format!("{total_usage:>3.0}%")).fg(color_by_pct(total_usage)))
         };
-        crate::core::Readout::ok(
-            Markup::text("cpu ")
-                .append(Markup::bracketed(load_str))
-                .append(Markup::text(" "))
-                .append(Markup::bracketed(Markup::text("temp ").append(temp_str))),
-        )
+        Markup::text("cpu ")
+            .append(Markup::bracketed(load_str))
+            .append(Markup::text(" "))
+            .append(Markup::bracketed(Markup::text("temp ").append(temp_str)))
     }
 
-    impl_handle_click_rotate_mode!();
-}
+    fn read_temp() -> Result<f64> {
+        let cs = Components::new_with_refreshed_list();
+        for component in &cs {
+            if let Some((name, _)) = &component.label().split_once(' ') {
+                if KNOWN_CPU_HWMON_NAMES.contains(name) {
+                    if let Some(temp) = component.temperature() {
+                        return Ok(temp as f64);
+                    }
+                }
+            }
+        }
+        Err(anyhow!("No temperature sensors found in components"))
+    }
 
-register_unit!(Cpu, CpuConfig);
+    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
+        self.mode = DisplayMode::next(self.mode);
+    }
+
+    pub fn fix_up_and_validate() {}
+}

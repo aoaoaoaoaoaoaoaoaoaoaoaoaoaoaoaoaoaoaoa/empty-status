@@ -1,4 +1,3 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -62,53 +61,6 @@ pub struct ClickEvent {
     pub relative_y: i32,
     pub width: i32,
     pub height: i32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChunkHealth {
-    Ok,
-    Warn,
-    Err,
-}
-
-#[derive(Debug, Clone)]
-pub struct Readout {
-    pub markup: crate::render::markup::Markup,
-    pub health: ChunkHealth,
-}
-
-impl Readout {
-    pub fn ok(markup: crate::render::markup::Markup) -> Self {
-        Self {
-            markup,
-            health: ChunkHealth::Ok,
-        }
-    }
-
-    pub fn warn(markup: crate::render::markup::Markup) -> Self {
-        Self {
-            markup,
-            health: ChunkHealth::Warn,
-        }
-    }
-
-    pub fn err(markup: crate::render::markup::Markup) -> Self {
-        Self {
-            markup,
-            health: ChunkHealth::Err,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-pub trait Unit: Send + std::fmt::Debug {
-    async fn read_formatted(&mut self) -> Readout;
-
-    fn handle_click(&mut self, _click: ClickEvent) {}
-
-    fn fix_up_and_validate(&mut self) -> Result<()> {
-        Ok(())
-    }
 }
 
 pub struct EmptyStatus {

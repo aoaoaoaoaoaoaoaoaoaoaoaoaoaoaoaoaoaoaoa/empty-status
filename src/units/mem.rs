@@ -3,14 +3,12 @@ use std::path::Path;
 use crate::display::{color_by_pct, color_by_pct_custom};
 use crate::mode_enum;
 use crate::render::markup::Markup;
-use crate::{core::Unit, impl_handle_click_rotate_mode, register_unit};
-use async_trait::async_trait;
 use serde::Deserialize;
 use sysinfo::{ProcessesToUpdate, System};
 
 mode_enum!(Totals, WorstProcess);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy)]
 pub struct MemConfig {}
 
 #[derive(Debug)]
@@ -86,17 +84,17 @@ impl Mem {
                     + Markup::text(" GiB rss"),
             )
     }
-}
 
-#[async_trait]
-impl Unit for Mem {
-    async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(match self.mode {
+    pub fn read_markup(&self) -> Markup {
+        match self.mode {
             DisplayMode::Totals => Self::read_formatted_totals(),
             DisplayMode::WorstProcess => Self::read_formatted_worst_rss(),
-        })
+        }
     }
-    impl_handle_click_rotate_mode!();
-}
 
-register_unit!(Mem, MemConfig);
+    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
+        self.mode = DisplayMode::next(self.mode);
+    }
+
+    pub fn fix_up_and_validate() {}
+}

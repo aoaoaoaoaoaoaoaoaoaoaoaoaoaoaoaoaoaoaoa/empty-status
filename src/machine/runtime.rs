@@ -35,6 +35,11 @@ fn render_poll_error<M: UnitMachine>(machine: &M, err: &PollError<M::UnitError>)
             Health::Error,
             crate::render::markup::Markup::text(format!("{name}: timeout")).fg(crate::core::RED),
         ),
+        PollError::Transport(TransportError::Http { status }) => (
+            Health::Error,
+            crate::render::markup::Markup::text(format!("{name}: HTTP {status}"))
+                .fg(crate::core::RED),
+        ),
         PollError::Transport(TransportError::Transport(msg)) => (
             Health::Error,
             crate::render::markup::Markup::text(format!("{name}: {msg}")).fg(crate::core::RED),
@@ -132,6 +137,7 @@ pub async fn run_empty_status_machines(
 
 pub fn spawn_machine_actor<M: UnitMachine>(
     machine: Arc<M>,
+    effects: std::sync::Arc<crate::machine::effects::EffectEngine>,
     cfg: crate::config::SchedulingCfg,
     gcfg: GlobalConfig,
     handle: usize,
@@ -204,9 +210,9 @@ pub fn spawn_machine_actor<M: UnitMachine>(
                 }
                 () = tokio::time::sleep_until(next_poll) => {
                     // Poll inline. (Clicks cannot interleave in this arm anyway.)
-                    let out = match tokio::time::timeout(poll_timeout, machine.poll(&mut state)).await {
+                    let out = match tokio::time::timeout(poll_timeout, machine.poll(&effects, &mut state)).await {
                         Ok(Ok(v)) => Ok(v),
-                        Ok(Err(e)) => Err(PollError::Unit(e)),
+                        Ok(Err(e)) => Err(e),
                         Err(_) => Err(PollError::Transport(TransportError::Timeout)),
                     };
 

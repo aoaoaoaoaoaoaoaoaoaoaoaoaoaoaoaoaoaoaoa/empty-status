@@ -2,36 +2,65 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
 use std::{fs, path::PathBuf};
-use toml::Value;
 use tracing::{debug, error, info, warn};
 use xdg::BaseDirectories;
 
 use crate::core::EmptyStatus;
 use crate::machine::runtime::{spawn_machine_actor, MachineWrapper};
-use crate::machine::units::legacy::LegacyMachine;
+use crate::machine::units::bat::BatMachine;
+use crate::machine::units::cpu::CpuMachine;
+use crate::machine::units::disk::DiskMachine;
+use crate::machine::units::mem::MemMachine;
 use crate::machine::units::net::NetMachine;
+use crate::machine::units::time::TimeMachine;
 use crate::machine::units::weather::WeatherMachine;
-use crate::registry;
+use crate::machine::units::wifi::WifiMachine;
 
 const CONFIG_PREFIX: &str = "empty-status";
 const CONFIG_FILE: &str = "config.toml";
 
-#[derive(Deserialize)]
-struct RawRootConfig {
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+struct RootConfig {
     #[serde(default)]
-    units: Vec<RawUnitConfig>,
+    units: Vec<UnitConfig>,
     #[serde(default)]
     global: GlobalConfig,
 }
 
-#[derive(Deserialize)]
-struct RawUnitConfig {
-    #[serde(rename = "type")]
-    kind: String,
-    // we do not include `SchedulingCfg` as a `flatten` field because some units
-    // may want to see the scheduling keys, so we want to keep them in `rest`
+#[derive(Deserialize, Debug)]
+#[serde(tag = "type")]
+enum UnitConfig {
+    #[serde(rename = "Weather")]
+    Weather(UnitSpec<crate::units::weather::WeatherConfig>),
+    #[serde(rename = "Time")]
+    Time(UnitSpec<crate::units::time::TimeConfig>),
+    #[serde(rename = "Cpu")]
+    Cpu(UnitSpec<crate::units::cpu::CpuConfig>),
+    #[serde(rename = "Mem")]
+    Mem(UnitSpec<crate::units::mem::MemConfig>),
+    #[serde(rename = "Disk")]
+    Disk(UnitSpec<crate::units::disk::DiskConfig>),
+    #[serde(rename = "Wifi")]
+    Wifi(UnitSpec<crate::units::wifi::WifiConfig>),
+    #[serde(rename = "Bat")]
+    Bat(UnitSpec<crate::units::bat::BatConfig>),
+    #[serde(rename = "Net")]
+    Net(UnitSpec<crate::units::net::NetConfig>),
+
+    // Stub for future drop-in units. Intentionally not implemented yet.
+    // When we do, we should make this a hard boundary with explicit schema and effects.
+    #[serde(other)]
+    _External,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+struct UnitSpec<Cfg> {
     #[serde(flatten)]
-    rest: Value,
+    sched: SchedulingCfg,
+    #[serde(flatten)]
+    cfg: Cfg,
 }
 
 #[serde_inline_default]
@@ -69,68 +98,126 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
         sample.into()
     };
 
-    let raw: RawRootConfig =
+    let raw: RootConfig =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
 
     let (click_tx, _) = tokio::sync::broadcast::channel::<crate::core::ClickEvent>(16);
     let mut machine_wrappers: Vec<MachineWrapper> = Vec::new();
+    let effects = crate::machine::effects::EffectEngine::new();
 
-    for (handle, ruc) in raw.units.iter().enumerate() {
-        let Some(factory) = registry::iter().find(|f| f.kind == ruc.kind) else {
-            warn!("Skipping unknown unit type '{}'", ruc.kind);
-            continue;
+    for (handle, uc) in raw.units.iter().enumerate() {
+        let spawn_result: Result<&'static str> = match uc {
+            UnitConfig::Weather(spec) => {
+                let mach = std::sync::Arc::new(WeatherMachine::new(spec.cfg.clone()));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Weather")
+            }
+            UnitConfig::Time(spec) => {
+                let mach = std::sync::Arc::new(TimeMachine::new(spec.cfg.clone()));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Time")
+            }
+            UnitConfig::Cpu(spec) => {
+                let mach = std::sync::Arc::new(CpuMachine::new(spec.cfg.clone()));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Cpu")
+            }
+            UnitConfig::Mem(spec) => {
+                let mach = std::sync::Arc::new(MemMachine::new(spec.cfg));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Mem")
+            }
+            UnitConfig::Disk(spec) => {
+                let mach = std::sync::Arc::new(DiskMachine::new(spec.cfg.clone()));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Disk")
+            }
+            UnitConfig::Wifi(spec) => {
+                let mach = std::sync::Arc::new(WifiMachine::new(spec.cfg.clone()));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Wifi")
+            }
+            UnitConfig::Bat(spec) => {
+                let mach = std::sync::Arc::new(BatMachine::new(spec.cfg.clone()));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Bat")
+            }
+            UnitConfig::Net(spec) => {
+                let mach = std::sync::Arc::new(NetMachine::new(spec.cfg.clone()));
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    spec.sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Net")
+            }
+            UnitConfig::_External => {
+                warn!("Skipping external unit type (not implemented yet)");
+                Ok("External")
+            }
         };
 
-        // Legacy config validation: ensure this unit can be constructed.
-        // The actual instance is owned by the per-unit machine state.
-        match (factory.build)(ruc.rest.clone()) {
-            Ok(unit) => {
-                info!("Successfully loaded unit '{}'", ruc.kind);
-                debug!("Unit config: {unit:?}");
+        match spawn_result {
+            Ok(kind) => {
+                info!("Successfully loaded unit '{kind}'");
+                debug!("Unit config: {uc:?}");
             }
-            Result::Err(e) => {
-                error!("Failed to load unit '{}': {}", ruc.kind, e);
-                continue;
-            }
-        }
-
-        let sched = match ruc.rest.clone().try_into::<SchedulingCfg>() {
-            Ok(cfg) => cfg,
             Err(e) => {
-                error!(
-                    "Failed to parse scheduling config for unit '{}': {e}",
-                    ruc.kind
-                );
-                continue;
+                error!("Failed to load unit: {e:#}");
             }
-        };
-
-        // Machines: Weather and Net are bespoke; everything else is wrapped as a polled unit.
-        if ruc.kind == "Weather" {
-            let cfg: crate::units::weather::WeatherConfig = ruc.rest.clone().try_into()?;
-            let mach = std::sync::Arc::new(WeatherMachine::new(cfg));
-            machine_wrappers.push(spawn_machine_actor(
-                mach, sched, raw.global, handle, &click_tx,
-            ));
-            continue;
         }
-        if ruc.kind == "Net" {
-            let cfg: crate::units::net::NetConfig = ruc.rest.clone().try_into()?;
-            let mach = std::sync::Arc::new(NetMachine::new(cfg));
-            machine_wrappers.push(spawn_machine_actor(
-                mach, sched, raw.global, handle, &click_tx,
-            ));
-            continue;
-        }
-
-        let legacy = std::sync::Arc::new(LegacyMachine::new(
-            factory.kind,
-            factory.build,
-            ruc.rest.clone(),
-        ));
-        machine_wrappers.push(spawn_machine_actor(
-            legacy, sched, raw.global, handle, &click_tx,
-        ));
     }
 
     info!("Using global config: {:?}", raw.global);
@@ -138,14 +225,17 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
 }
 
 fn sample_config() -> &'static str {
-    r#"# each unit defines its own polling interval. to save resources you can define a global floor here
+    r#"# Global config.
+
 min_polling_interval = 0.15
 padding = 1
 
-# units will appear on the bar in the same order as they are defined here
-# topmost is rightmost
+# Units appear on the bar in the same order as they are defined here.
+# Topmost is rightmost.
+
 [[units]]
 type = "Time"
+poll_interval = 1.0
 format = "%a %b %d %Y - %H:%M"
 "#
 }

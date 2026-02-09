@@ -1,5 +1,5 @@
-use crate::core::Unit;
 use crate::core::{ClickEvent, VIOLET};
+use crate::machine::effects::{EffectReq, FsRead, ProcBatch, ProcKey};
 use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
 use crate::render::markup::Markup;
 use crate::units::net::{Net, NetConfig};
@@ -31,13 +31,8 @@ impl std::fmt::Display for UnitErr {
 
 impl std::error::Error for UnitErr {}
 
-#[derive(Debug, Clone)]
-pub struct PollOut {
-    view: Markup,
-}
-
 impl UnitMachine for NetMachine {
-    type PollOut = PollOut;
+    type PollOut = Markup;
     type State = State;
     type UnitError = UnitErr;
 
@@ -74,29 +69,70 @@ impl UnitMachine for NetMachine {
         (None, UnitDecision::PollNow)
     }
 
-    async fn poll(&self, state: &mut Self::State) -> Result<Self::PollOut, Self::UnitError> {
+    async fn poll(
+        &self,
+        effects: &crate::machine::effects::EffectEngine,
+        state: &mut Self::State,
+    ) -> Result<Self::PollOut, crate::machine::types::PollError<Self::UnitError>> {
         let Some(unit) = state.unit.as_mut() else {
-            return Err(UnitErr("missing net unit".into()));
+            return Err(crate::machine::types::PollError::Unit(UnitErr(
+                "missing net unit".into(),
+            )));
         };
 
-        // Batch-only polling: view is computed here; any ping background work is drained
-        // by `read_formatted_ping()`.
-        let view = match unit.mode {
-            crate::units::net::DisplayMode::Bandwidth => unit.read_formatted_stats(),
-            crate::units::net::DisplayMode::Ping => unit.read_formatted_ping(),
-        };
-
-        Ok(PollOut { view })
+        if unit.mode == crate::units::net::DisplayMode::Ping {
+            let key = ProcKey::new(format!(
+                "ping:{}:{}",
+                unit.cfg.interface, unit.cfg.ping_server
+            ));
+            let cmd = vec![
+                "ping".to_string(),
+                "-n".to_string(),
+                "-O".to_string(),
+                "-I".to_string(),
+                unit.cfg.interface.clone(),
+                unit.cfg.ping_server.clone(),
+            ];
+            let lines = match effects
+                .run(EffectReq::ProcBatch(ProcBatch {
+                    key,
+                    cmd,
+                    max_lines: 64,
+                }))
+                .await
+            {
+                Ok(crate::machine::effects::EffectOut::ProcLines(lines)) => lines,
+                Ok(_) => Vec::new(),
+                Err(e) => {
+                    return Err(crate::machine::types::PollError::Transport(e));
+                }
+            };
+            Ok(unit.read_formatted_ping(lines))
+        } else {
+            let carrier = effects
+                .run(EffectReq::FsRead(FsRead {
+                    key: crate::machine::effects::FsKey::new(format!(
+                        "sys/class/net/{}/carrier",
+                        unit.cfg.interface
+                    )),
+                    path: format!("/sys/class/net/{}/carrier", unit.cfg.interface).into(),
+                    cache_fresh_for: std::time::Duration::from_millis(500),
+                }))
+                .await
+                .ok()
+                .and_then(|out| out.expect::<bytes::Bytes>().ok());
+            Ok(unit.read_formatted_stats(carrier.as_deref()))
+        }
     }
 
     fn on_poll_ok(
         &self,
         _state: &mut Self::State,
-        out: Self::PollOut,
+        body: Self::PollOut,
     ) -> (
         Availability<Markup, crate::machine::types::PollError<Self::UnitError>>,
         UnitDecision,
     ) {
-        (Availability::Ready(out.view), UnitDecision::Idle)
+        (Availability::Ready(body), UnitDecision::Idle)
     }
 }

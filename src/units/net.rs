@@ -1,21 +1,14 @@
-use crate::core::{ClickEvent, Unit, GREEN, GREY, ORANGE, RED, VIOLET};
+use crate::core::{ClickEvent, GREEN, GREY, ORANGE, RED, VIOLET};
 use crate::display::{color_by_pct_custom, COL_USE_HIGH, COL_USE_NORM, COL_USE_VERY_HIGH};
+use crate::mode_enum;
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
-use crate::{mode_enum, register_unit};
-use anyhow::{Context, Result};
-use async_trait::async_trait;
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
 use serde_scan::scan;
 use std::collections::VecDeque;
-use std::process::Stdio;
 use std::time::Instant;
 use sysinfo::Networks;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::mpsc;
-use tracing::warn;
 
 mode_enum!(Bandwidth, Ping);
 
@@ -43,15 +36,13 @@ struct RxTxRecord {
 
 #[derive(Debug)]
 pub struct Net {
-    cfg: NetConfig,
+    pub(crate) cfg: NetConfig,
     pub(crate) mode: DisplayMode,
     // stats
     rxtx: Option<RxTxRecord>,
     rx_ema: Ema<f64>,
     tx_ema: Ema<f64>,
     // ping
-    ping_child: Option<Child>,
-    ping_rx: mpsc::UnboundedReceiver<PingOutput>,
     ping_times: VecDeque<f64>,
     ping_received: usize,
     ping_last_seq: u32,
@@ -70,76 +61,35 @@ struct PingOutput {
 
 impl Net {
     pub fn from_cfg(cfg: NetConfig) -> Self {
-        let (_tx, rx) = mpsc::unbounded_channel();
         let ping_times = VecDeque::with_capacity(cfg.ping_window);
         Self {
             mode: DisplayMode::Bandwidth,
             rxtx: None,
             rx_ema: Ema::new(cfg.smoothing_window_sec),
             tx_ema: Ema::new(cfg.smoothing_window_sec),
-            ping_child: None,
-            ping_rx: rx,
             ping_times,
             ping_received: 0,
             ping_last_seq: 0,
             cfg,
         }
     }
-    fn start_ping(&mut self) -> Result<()> {
-        if self.ping_child.is_some() {
-            return Ok(());
-        }
-
-        let mut child = Command::new("ping")
-            .arg("-n") // flood-protect per platform (works on Linux/macOS)
-            .arg("-O") // report duplicates/lost early so every pkt has RTT
-            .arg("-I")
-            .arg(&self.cfg.interface)
-            .arg(&self.cfg.ping_server)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .spawn()
-            .context("failed to spawn ping")?;
-
-        let stdout = child.stdout.take().context("could not open ping stdout")?;
-
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.ping_rx = rx;
-
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = lines.next_line().await {
-                let slice = &line;
-                let po: PingOutput = match scan!("{} bytes from {}: icmp_seq={} ttl={} time={} ms" <- slice)
-                {
-                    Ok(po) => po,
-                    Err(_) => {
-                        continue;
-                    }
-                };
-                let _ = tx.send(po);
-            }
-        });
-
-        self.ping_child = Some(child);
-        Ok(())
-    }
-
     fn stop_ping(&mut self) {
-        if let Some(mut child) = self.ping_child.take() {
-            std::mem::drop(child.kill());
-        }
         self.ping_times.clear();
     }
 
-    fn refresh_ping_buffer(&mut self) {
-        while let Ok(po) = self.ping_rx.try_recv() {
+    fn refresh_ping_buffer_from(&mut self, lines: Vec<String>) {
+        for line in lines {
             if self.ping_times.len() == self.cfg.ping_window {
                 self.ping_times.pop_front();
             }
+
+            let slice = line.as_str();
+            let po: PingOutput = match scan!("{} bytes from {}: icmp_seq={} ttl={} time={} ms" <- slice)
+            {
+                Ok(po) => po,
+                Err(_) => continue,
+            };
+
             self.ping_times.push_back(po.time_ms);
             self.ping_last_seq = po.icmp_seq;
             self.ping_received += 1;
@@ -157,8 +107,8 @@ impl Net {
         (median, mad)
     }
 
-    pub(crate) fn read_formatted_ping(&mut self) -> Markup {
-        self.refresh_ping_buffer();
+    pub(crate) fn read_formatted_ping(&mut self, lines: Vec<String>) -> Markup {
+        self.refresh_ping_buffer_from(lines);
         let prefix = Markup::text(format!(
             "net {} [ping {}] ",
             &self.cfg.interface, &self.cfg.ping_server
@@ -193,18 +143,18 @@ impl Net {
     }
 
     // STATS
-    pub(crate) fn read_formatted_stats(&mut self) -> Markup {
+    pub(crate) fn read_formatted_stats(&mut self, carrier: Option<&[u8]>) -> Markup {
         let nets = Networks::new_with_refreshed_list();
         let Some(net) = nets.get(self.cfg.interface.as_str()) else {
             return Markup::text(format!("net {} ", self.cfg.interface))
                 + Markup::text("gone").fg(RED);
         };
-        let carrier_path = format!("/sys/class/net/{}/carrier", self.cfg.interface);
-        if let Ok(carrier) = std::fs::read_to_string(&carrier_path) {
-            if carrier.trim() == "0" {
-                return Markup::text(format!("net {} ", self.cfg.interface))
-                    + Markup::text("down").fg(RED);
-            }
+        if carrier
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .is_some_and(|v| v.trim() == "0")
+        {
+            return Markup::text(format!("net {} ", self.cfg.interface))
+                + Markup::text("down").fg(RED);
         }
 
         let prefix = Markup::text(format!("net {} ", self.cfg.interface));
@@ -265,22 +215,10 @@ impl Net {
     }
 }
 
-#[async_trait]
-impl Unit for Net {
-    async fn read_formatted(&mut self) -> crate::core::Readout {
-        crate::core::Readout::ok(match self.mode {
-            DisplayMode::Bandwidth => self.read_formatted_stats(),
-            DisplayMode::Ping => self.read_formatted_ping(),
-        })
-    }
-    fn handle_click(&mut self, _click: ClickEvent) {
+impl Net {
+    pub fn handle_click(&mut self, _click: ClickEvent) {
         self.mode = match self.mode {
-            DisplayMode::Bandwidth => {
-                if let Err(err) = self.start_ping() {
-                    warn!("failed to start ping: {err}");
-                }
-                DisplayMode::Ping
-            }
+            DisplayMode::Bandwidth => DisplayMode::Ping,
             DisplayMode::Ping => {
                 self.stop_ping();
                 DisplayMode::Bandwidth
@@ -288,5 +226,3 @@ impl Unit for Net {
         };
     }
 }
-
-register_unit!(Net, NetConfig);

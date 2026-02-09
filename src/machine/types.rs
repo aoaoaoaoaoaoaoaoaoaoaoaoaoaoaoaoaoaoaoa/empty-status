@@ -58,8 +58,21 @@ pub enum UnitDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
     Timeout,
+    Http { status: u16 },
     Transport(String),
 }
+
+impl std::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout => f.write_str("timeout"),
+            Self::Http { status } => write!(f, "HTTP {status}"),
+            Self::Transport(s) => f.write_str(s),
+        }
+    }
+}
+
+impl std::error::Error for TransportError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PollError<E> {
@@ -70,6 +83,18 @@ pub enum PollError<E> {
 impl<E> From<String> for PollError<E> {
     fn from(value: String) -> Self {
         Self::Transport(TransportError::Transport(value))
+    }
+}
+
+impl<E> From<TransportError> for PollError<E> {
+    fn from(value: TransportError) -> Self {
+        Self::Transport(value)
+    }
+}
+
+impl<E> From<anyhow::Error> for PollError<E> {
+    fn from(value: anyhow::Error) -> Self {
+        Self::Transport(TransportError::Transport(value.to_string()))
     }
 }
 
@@ -92,8 +117,9 @@ pub(crate) trait UnitMachine: Send + Sync + std::fmt::Debug + 'static {
 
     fn poll(
         &self,
+        effects: &crate::machine::effects::EffectEngine,
         state: &mut Self::State,
-    ) -> impl std::future::Future<Output = Result<Self::PollOut, Self::UnitError>> + Send;
+    ) -> impl std::future::Future<Output = Result<Self::PollOut, PollError<Self::UnitError>>> + Send;
 
     fn render_unit_error(&self, err: &Self::UnitError) -> Markup {
         Markup::text(err.to_string())
