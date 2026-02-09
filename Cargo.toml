@@ -1,6 +1,6 @@
 [package]
 name = "empty-status"
-version = "1.3.0"
+version = "1.4.0"
 edition = "2021"
 description = "an i3 status bar"
 authors = ["空"]
