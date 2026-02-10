@@ -284,20 +284,15 @@ impl Weather {
             let mut qp = url.query_pairs_mut();
             qp.append_pair("latitude", &format!("{:.4}", self.cfg.lat));
             qp.append_pair("longitude", &format!("{:.4}", self.cfg.lon));
-            match self.mode {
-                DisplayMode::Now => {
-                    qp.append_pair("current", "temperature_2m,weathercode");
-                }
-                DisplayMode::Forecast => {
-                    qp.append_pair("hourly", "temperature_2m,weathercode");
-                    qp.append_pair("forecast_days", "2");
-                }
-            }
+            // Superset request: one payload backs both Now and Forecast views.
+            qp.append_pair("current", "temperature_2m,weathercode");
+            qp.append_pair("hourly", "temperature_2m,weathercode");
+            qp.append_pair("forecast_days", "2");
         }
 
         let key = HttpCacheKey::new(format!(
-            "open-meteo:{}:{:.4}:{:.4}",
-            self.mode, self.cfg.lat, self.cfg.lon
+            "open-meteo:{:.4}:{:.4}",
+            self.cfg.lat, self.cfg.lon
         ));
         let min_interval = self
             .cfg
@@ -362,6 +357,8 @@ impl Weather {
     }
 
     pub(crate) fn format_res_now(&self, res: Option<&OMCurrentWeather>) -> Markup {
+        let derived = res.is_none().then(|| self.current_from_hourly()).flatten();
+        let res = res.or(derived.as_ref());
         let Some(res) = res else {
             return Markup::text("weather ") + Markup::text("current failed to load").fg(BROWN);
         };
@@ -371,6 +368,29 @@ impl Weather {
             res.wmo_code,
             res.temp_c,
         )))
+    }
+
+    fn current_from_hourly(&self) -> Option<OMCurrentWeather> {
+        let hourly = self.res.as_ref()?.hourly.as_ref()?;
+        let now_utc = Utc::now();
+
+        // Prefer an hourly sample at/just before now (UTC).
+        // Open-Meteo hourly data is regular; we only need a stable "now-ish" point.
+        let mut best_ix = None;
+        for (ix, t) in hourly.times_utc.iter().enumerate() {
+            if *t <= now_utc {
+                best_ix = Some(ix);
+            } else {
+                break;
+            }
+        }
+        let ix = best_ix.or(Some(0))?;
+
+        Some(OMCurrentWeather {
+            temp_c: hourly.temperatures_c.get(ix).copied()?,
+            wmo_code: *hourly.wmo_codes.get(ix)?,
+            time: *hourly.times_utc.get(ix)?,
+        })
     }
 
     fn format_single_code_and_tc(&self, time: DateTime<Utc>, wmo_code: Wmo, temp_c: f64) -> Markup {
@@ -476,8 +496,6 @@ impl Weather {
 
     pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
         self.mode = DisplayMode::next(self.mode);
-        self.last_successful_poll = None;
-        self.last_attempt_poll = None;
     }
 }
 

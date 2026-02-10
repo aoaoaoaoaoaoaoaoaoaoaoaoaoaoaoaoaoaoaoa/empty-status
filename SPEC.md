@@ -18,6 +18,7 @@ error framing. The output path is fully typed until the final i3bar serializatio
 3. Rendering is typed; stringly formatting is prohibited in unit logic.
 4. Effects are centralized; units do not perform IO directly.
 5. Errors are structured; transport vs unit errors are explicit.
+6. External APIs are hostile: enforce conservative rate limits.
 
 ## Architecture overview
 
