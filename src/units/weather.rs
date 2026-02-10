@@ -272,7 +272,10 @@ impl Weather {
         }
     }
 
-    const MIN_OPEN_METEO_INTERVAL: f64 = 60.0;
+    // Open-Meteo open-access limits (documented): 600/min, 5k/hour, 10k/day.
+    // Still enforce a much more conservative floor to avoid bursty behavior and
+    // to reduce risk of upstream IP throttling.
+    const MIN_OPEN_METEO_INTERVAL: f64 = 120.0;
 
     pub(crate) async fn poll_weather(
         &mut self,
