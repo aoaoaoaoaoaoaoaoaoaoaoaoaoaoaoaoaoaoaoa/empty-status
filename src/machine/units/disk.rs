@@ -43,12 +43,24 @@ impl UnitMachine for DiskMachine {
     fn init(&self) -> (Self::State, View, UnitDecision) {
         let unit = Disk::from_cfg(self.cfg.clone());
         Disk::fix_up_and_validate();
-        let view = View {
-            body: Markup::text("disk ") + Markup::text("loading").fg(crate::core::VIOLET),
-            health: Health::Degraded,
+        let (view, decision) = match self.cfg.validate() {
+            Ok(()) => (
+                View {
+                    body: Markup::text("disk ") + Markup::text("loading").fg(crate::core::VIOLET),
+                    health: Health::Degraded,
+                },
+                UnitDecision::PollNow,
+            ),
+            Err(msg) => (
+                View {
+                    body: Markup::text("disk ") + Markup::text(msg).fg(crate::core::RED),
+                    health: Health::Error,
+                },
+                UnitDecision::Idle,
+            ),
         };
 
-        (State { unit }, view, UnitDecision::PollNow)
+        (State { unit }, view, decision)
     }
 
     fn on_tick(&self, _state: &mut Self::State) -> (Option<View>, UnitDecision) {

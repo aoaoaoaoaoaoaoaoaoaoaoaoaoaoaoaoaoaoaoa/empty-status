@@ -11,7 +11,8 @@ const BARS: &[&str; 9] = &[" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇",
 #[serde_inline_default]
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiskConfig {
-    disk: String,
+    #[serde(default)]
+    disk: Option<String>,
     #[serde(default)]
     partlabel: Option<String>,
     #[serde(default)]
@@ -25,6 +26,18 @@ pub struct DiskConfig {
 
     #[serde_inline_default(1.5e9)]
     read_peak_ref: f64,
+}
+
+impl DiskConfig {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let has_any_selector =
+            self.disk.is_some() || self.partlabel.is_some() || self.partuuid.is_some();
+        if has_any_selector {
+            Ok(())
+        } else {
+            Err("Disk: missing selector: set `disk` or `partlabel` or `partuuid`")
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -49,7 +62,7 @@ impl Disk {
         let sector_size = None;
         let (last_r, last_w): (u64, u64) = (0, 0);
         let name = if cfg.partlabel.is_none() && cfg.partuuid.is_none() {
-            Some(cfg.disk.clone())
+            cfg.disk.clone()
         } else {
             None
         };
@@ -123,7 +136,7 @@ impl Disk {
         if let Some(uuid) = self.cfg.partuuid.as_deref() {
             return uuid;
         }
-        &self.cfg.disk
+        self.cfg.disk.as_deref().unwrap_or("<invalid disk cfg>")
     }
 
     pub fn selector_partlabel(&self) -> Option<&str> {

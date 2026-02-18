@@ -45,7 +45,7 @@ poll_interval = 0.333
 [[units]]
 type = "Disk"
 poll_interval = 0.333
-# Disk name (e.g. "nvme0n1p1"). Used unless `partlabel`/`partuuid` are set.
+# Disk name (e.g. "nvme0n1p1"). If `partlabel`/`partuuid` are set, `disk` may be omitted.
 disk = "nvme0n1p1"
 # Optional stable selectors; if set, `disk` is resolved at runtime.
 # Use TOML absence for "unset" (omit these keys).

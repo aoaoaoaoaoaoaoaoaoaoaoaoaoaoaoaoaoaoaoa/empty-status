@@ -72,4 +72,19 @@ poll_interval = 0.5
         let text = include_str!("../config.example.toml");
         let _: RootConfigForTest = toml::from_str(text).unwrap();
     }
+
+    #[test]
+    fn disk_unit_allows_partlabel_only() {
+        let text = r#"
+[global]
+min_polling_interval = 0.25
+padding = 1
+
+[[units]]
+type = "Disk"
+poll_interval = 0.333
+partlabel = "ROOT"
+"#;
+        let _: RootConfigForTest = toml::from_str(text).unwrap();
+    }
 }
