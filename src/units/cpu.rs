@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_inline_default::serde_inline_default;
 use sysinfo::Components;
@@ -103,12 +103,11 @@ impl Cpu {
     fn read_temp() -> Result<f64> {
         let cs = Components::new_with_refreshed_list();
         for component in &cs {
-            if let Some((name, _)) = &component.label().split_once(' ') {
-                if KNOWN_CPU_HWMON_NAMES.contains(name) {
-                    if let Some(temp) = component.temperature() {
-                        return Ok(temp as f64);
-                    }
-                }
+            if let Some((name, _)) = &component.label().split_once(' ')
+                && KNOWN_CPU_HWMON_NAMES.contains(name)
+                && let Some(temp) = component.temperature()
+            {
+                return Ok(temp as f64);
             }
         }
         Err(anyhow!("No temperature sensors found in components"))

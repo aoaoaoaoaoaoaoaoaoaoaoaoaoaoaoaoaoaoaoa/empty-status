@@ -136,7 +136,7 @@ impl UnitMachine for WeatherMachine {
         state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<Markup, crate::machine::types::PollError<Self::UnitError>>,
+        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
         UnitDecision,
     ) {
         // `read_markup()` already applied caching/poll-if-needed and rendered the correct mode.
@@ -148,6 +148,6 @@ impl UnitMachine for WeatherMachine {
             }
         }
 
-        (Availability::Ready(body), UnitDecision::Idle)
+        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
     }
 }

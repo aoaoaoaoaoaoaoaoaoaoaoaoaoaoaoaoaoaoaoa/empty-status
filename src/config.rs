@@ -6,12 +6,13 @@ use tracing::{debug, error, info, warn};
 use xdg::BaseDirectories;
 
 use crate::core::EmptyStatus;
-use crate::machine::runtime::{spawn_machine_actor, MachineWrapper};
+use crate::machine::runtime::{MachineWrapper, spawn_machine_actor};
 use crate::machine::units::bat::BatMachine;
 use crate::machine::units::cpu::CpuMachine;
 use crate::machine::units::disk::DiskMachine;
 use crate::machine::units::mem::MemMachine;
 use crate::machine::units::net::NetMachine;
+use crate::machine::units::quota::QuotaMachine;
 use crate::machine::units::time::TimeMachine;
 use crate::machine::units::weather::WeatherMachine;
 use crate::machine::units::wifi::WifiMachine;
@@ -47,6 +48,8 @@ enum UnitConfig {
     Bat(UnitSpec<crate::units::bat::BatConfig>),
     #[serde(rename = "Net")]
     Net(UnitSpec<crate::units::net::NetConfig>),
+    #[serde(rename = "Quota")]
+    Quota(UnitSpec<crate::units::quota::QuotaConfig>),
 
     // Stub for future drop-in units. Intentionally not implemented yet.
     // When we do, we should make this a hard boundary with explicit schema and effects.
@@ -203,6 +206,19 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                 ));
                 Ok("Net")
             }
+            UnitConfig::Quota(spec) => {
+                let mach = std::sync::Arc::new(QuotaMachine::new(spec.cfg.clone()));
+                let sched = canonical_quota_sched(spec.sched);
+                machine_wrappers.push(spawn_machine_actor(
+                    mach,
+                    effects.clone(),
+                    sched,
+                    raw.global,
+                    handle,
+                    &click_tx,
+                ));
+                Ok("Quota")
+            }
             UnitConfig::_External => {
                 warn!("Skipping external unit type (not implemented yet)");
                 Ok("External")
@@ -224,9 +240,16 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
     Ok(EmptyStatus::new(raw.global, machine_wrappers, click_tx))
 }
 
+fn canonical_quota_sched(sched: SchedulingCfg) -> SchedulingCfg {
+    SchedulingCfg {
+        poll_interval: crate::machine::units::quota::canonical_poll_interval(sched.poll_interval),
+    }
+}
+
 fn sample_config() -> &'static str {
     r#"# Global config.
 
+[global]
 min_polling_interval = 0.15
 padding = 1
 

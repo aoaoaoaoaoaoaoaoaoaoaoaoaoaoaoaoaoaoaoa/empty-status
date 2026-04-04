@@ -15,7 +15,7 @@ use tracing_appender::{
     non_blocking,
     rolling::{RollingFileAppender, Rotation},
 };
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::config::load_status_from_cfg;
 

@@ -3,6 +3,7 @@ use crate::machine::effects::{EffectReq, FsRead, ProcBatch, ProcKey};
 use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
 use crate::render::markup::Markup;
 use crate::units::net::{Net, NetConfig};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct NetMachine {
@@ -98,6 +99,7 @@ impl UnitMachine for NetMachine {
                     key,
                     cmd,
                     max_lines: 64,
+                    startup_grace: Duration::from_millis(250),
                 }))
                 .await
             {
@@ -116,7 +118,7 @@ impl UnitMachine for NetMachine {
                         unit.cfg.interface
                     )),
                     path: format!("/sys/class/net/{}/carrier", unit.cfg.interface).into(),
-                    cache_fresh_for: std::time::Duration::from_millis(500),
+                    cache_fresh_for: Duration::from_millis(500),
                 }))
                 .await
                 .ok()
@@ -130,9 +132,9 @@ impl UnitMachine for NetMachine {
         _state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<Markup, crate::machine::types::PollError<Self::UnitError>>,
+        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
         UnitDecision,
     ) {
-        (Availability::Ready(body), UnitDecision::Idle)
+        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
     }
 }

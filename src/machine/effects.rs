@@ -22,6 +22,7 @@ impl HttpCacheKey {
 pub enum EffectReq {
     HttpGet(HttpGet),
     ProcBatch(ProcBatch),
+    ProcExec(ProcExec),
     FsRead(FsRead),
     FsListDir(FsListDir),
 }
@@ -150,6 +151,12 @@ pub struct ProcBatch {
     pub key: ProcKey,
     pub cmd: Vec<String>,
     pub max_lines: usize,
+    pub startup_grace: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcExec {
+    pub cmd: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,7 +202,7 @@ struct DirCacheEntry {
 
 #[derive(Debug)]
 struct ProcState {
-    _child: tokio::process::Child,
+    child: tokio::process::Child,
     rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 }
 
@@ -237,6 +244,7 @@ impl EffectEngine {
         match req {
             EffectReq::HttpGet(get) => self.http_get(get).await.map(EffectOut::Http),
             EffectReq::ProcBatch(pb) => self.proc_batch(pb).await.map(EffectOut::ProcLines),
+            EffectReq::ProcExec(px) => self.proc_exec(px).await.map(EffectOut::ProcLines),
             EffectReq::FsRead(fr) => self.fs_read(fr).await.map(EffectOut::FsBytes),
             EffectReq::FsListDir(fr) => self.fs_list_dir(fr).await.map(EffectOut::DirEntries),
         }
@@ -246,10 +254,10 @@ impl EffectEngine {
         let now = Instant::now();
         {
             let cache = self.fs.lock().await;
-            if let Some(ent) = cache.get(&fr.key) {
-                if now < ent.fresh_until {
-                    return Ok(ent.bytes.clone());
-                }
+            if let Some(ent) = cache.get(&fr.key)
+                && now < ent.fresh_until
+            {
+                return Ok(ent.bytes.clone());
             }
         }
 
@@ -259,7 +267,7 @@ impl EffectEngine {
             .map_err(|e| TransportError::Transport(e.to_string()))?;
 
         let mut cache = self.fs.lock().await;
-        cache.insert(
+        let _ = cache.insert(
             fr.key,
             FsCacheEntry {
                 fresh_until: now + fr.cache_fresh_for,
@@ -274,10 +282,10 @@ impl EffectEngine {
         let now = Instant::now();
         {
             let cache = self.dirs.lock().await;
-            if let Some(ent) = cache.get(&fr.key) {
-                if now < ent.fresh_until {
-                    return Ok(ent.entries.clone());
-                }
+            if let Some(ent) = cache.get(&fr.key)
+                && now < ent.fresh_until
+            {
+                return Ok(ent.entries.clone());
             }
         }
 
@@ -295,7 +303,7 @@ impl EffectEngine {
         let entries = DirEntries(out);
 
         let mut cache = self.dirs.lock().await;
-        cache.insert(
+        let _ = cache.insert(
             fr.key,
             DirCacheEntry {
                 fresh_until: now + fr.cache_fresh_for,
@@ -307,6 +315,7 @@ impl EffectEngine {
 
     async fn proc_batch(&self, pb: ProcBatch) -> Result<Vec<String>, TransportError> {
         let mut procs = self.procs.lock().await;
+        let mut spawned_now = false;
         if !procs.contains_key(&pb.key) {
             let mut it = pb.cmd.iter();
             let exe = it
@@ -314,9 +323,10 @@ impl EffectEngine {
                 .ok_or_else(|| TransportError::Transport("empty command".into()))?;
             let mut cmd = tokio::process::Command::new(exe);
             for arg in it {
-                cmd.arg(arg);
+                let _ = cmd.arg(arg);
             }
-            cmd.stdin(std::process::Stdio::null())
+            let _ = cmd
+                .stdin(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped());
 
@@ -332,15 +342,17 @@ impl EffectEngine {
             let mut lines = reader.lines();
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-            tokio::spawn(async move {
+            drop(tokio::spawn(async move {
                 while let Ok(Some(line)) = lines.next_line().await {
                     let _ = tx.send(line);
                 }
-            });
+            }));
 
-            procs.insert(pb.key.clone(), ProcState { _child: child, rx });
+            let _ = procs.insert(pb.key.clone(), ProcState { child, rx });
+            spawned_now = true;
         }
 
+        let mut drop_proc = None;
         let st = procs
             .get_mut(&pb.key)
             .ok_or_else(|| TransportError::Transport("proc missing".into()))?;
@@ -351,12 +363,76 @@ impl EffectEngine {
                 Ok(line) => out.push(line),
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    return Err(TransportError::Transport("proc disconnected".into()))
+                    drop_proc = Some("proc disconnected".to_string());
+                    break;
                 }
             }
         }
 
+        let mut channel_closed = false;
+        if out.is_empty() && spawned_now && drop_proc.is_none() {
+            match tokio::time::timeout(pb.startup_grace, st.rx.recv()).await {
+                Ok(Some(line)) => out.push(line),
+                Ok(None) => {
+                    channel_closed = true;
+                }
+                Err(_) => {}
+            }
+        }
+
+        if out.is_empty() && drop_proc.is_none() {
+            match st.child.try_wait() {
+                Ok(Some(status)) => {
+                    drop_proc = Some(format!("proc exited: {status}"));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    drop_proc = Some(format!("proc wait failed: {error}"));
+                }
+            }
+        }
+
+        if out.is_empty() && drop_proc.is_none() && channel_closed {
+            drop_proc = Some("proc disconnected".to_string());
+        }
+
+        if let Some(reason) = drop_proc {
+            let _ = procs.remove(&pb.key);
+            return Err(TransportError::Transport(reason));
+        }
+
         Ok(out)
+    }
+
+    async fn proc_exec(&self, px: ProcExec) -> Result<Vec<String>, TransportError> {
+        let mut it = px.cmd.iter();
+        let exe = it
+            .next()
+            .ok_or_else(|| TransportError::Transport("empty command".into()))?;
+
+        let mut cmd = tokio::process::Command::new(exe);
+        for arg in it {
+            let _ = cmd.arg(arg);
+        }
+        let output = cmd
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .output()
+            .await
+            .map_err(|error| TransportError::Transport(error.to_string()))?;
+
+        if !output.status.success() {
+            return Err(TransportError::Transport(format!(
+                "proc exited: {}",
+                output.status
+            )));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(ToString::to_string)
+            .collect())
     }
 
     async fn http_get(&self, get: HttpGet) -> Result<HttpResponse, TransportError> {
@@ -364,10 +440,10 @@ impl EffectEngine {
 
         {
             let st = self.http.lock().await;
-            if let Some(ent) = st.cache.get(&get.key) {
-                if now < ent.fresh_until {
-                    return Ok(ent.response.clone());
-                }
+            if let Some(ent) = st.cache.get(&get.key)
+                && now < ent.fresh_until
+            {
+                return Ok(ent.response.clone());
             }
         }
 
@@ -406,7 +482,7 @@ impl EffectEngine {
         let response = HttpResponse { body };
 
         let mut st = self.http.lock().await;
-        st.cache.insert(
+        let _ = st.cache.insert(
             get.key,
             HttpCacheEntry {
                 fresh_until: now + get.policy.cache_fresh_for,
@@ -414,5 +490,78 @@ impl EffectEngine {
             },
         );
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EffectEngine, ProcBatch, ProcExec, ProcKey, TransportError};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn proc_batch_reports_immediate_exit() {
+        let effects = EffectEngine::new();
+        let error = effects
+            .proc_batch(ProcBatch {
+                key: ProcKey::new("immediate-exit"),
+                cmd: vec!["sh".to_string(), "-lc".to_string(), "exit 7".to_string()],
+                max_lines: 8,
+                startup_grace: Duration::from_millis(250),
+            })
+            .await;
+        assert!(
+            matches!(&error, Err(TransportError::Transport(message)) if message.contains("proc exited")),
+            "unexpected proc result: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn proc_batch_waits_briefly_for_first_line() {
+        let effects = EffectEngine::new();
+        let lines = effects
+            .proc_batch(ProcBatch {
+                key: ProcKey::new("delayed-first-line"),
+                cmd: vec![
+                    "sh".to_string(),
+                    "-lc".to_string(),
+                    "sleep 0.05; printf 'alive\\n'; sleep 1".to_string(),
+                ],
+                max_lines: 8,
+                startup_grace: Duration::from_millis(250),
+            })
+            .await;
+        assert!(
+            matches!(&lines, Ok(lines) if *lines == vec!["alive".to_string()]),
+            "proc should yield its first line: {lines:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn proc_exec_collects_stdout_lines() {
+        let effects = EffectEngine::new();
+        let lines = effects
+            .proc_exec(ProcExec {
+                cmd: vec![
+                    "sh".to_string(),
+                    "-lc".to_string(),
+                    "printf 'alpha\\nbeta\\n'".to_string(),
+                ],
+            })
+            .await;
+        assert_eq!(lines, Ok(vec!["alpha".to_string(), "beta".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn proc_exec_reports_exit_status() {
+        let effects = EffectEngine::new();
+        let error = effects
+            .proc_exec(ProcExec {
+                cmd: vec!["sh".to_string(), "-lc".to_string(), "exit 9".to_string()],
+            })
+            .await;
+        assert!(
+            matches!(&error, Err(TransportError::Transport(message)) if message.contains("proc exited")),
+            "unexpected proc result: {error:?}"
+        );
     }
 }

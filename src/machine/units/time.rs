@@ -74,9 +74,9 @@ impl UnitMachine for TimeMachine {
         _state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<Markup, crate::machine::types::PollError<Self::UnitError>>,
+        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
         UnitDecision,
     ) {
-        (Availability::Ready(body), UnitDecision::Idle)
+        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
     }
 }

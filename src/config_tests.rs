@@ -6,7 +6,7 @@ mod tests {
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "deserialization-only schema mirror in tests")]
     struct RootConfigForTest {
         global: GlobalConfig,
         #[serde(default)]
@@ -15,7 +15,7 @@ mod tests {
 
     #[derive(Deserialize)]
     #[serde(tag = "type")]
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "deserialization-only schema mirror in tests")]
     enum UnitConfigForTest {
         #[serde(rename = "Weather")]
         Weather(UnitSpecForTest<crate::units::weather::WeatherConfig>),
@@ -33,11 +33,13 @@ mod tests {
         Bat(UnitSpecForTest<crate::units::bat::BatConfig>),
         #[serde(rename = "Net")]
         Net(UnitSpecForTest<crate::units::net::NetConfig>),
+        #[serde(rename = "Quota")]
+        Quota(UnitSpecForTest<crate::units::quota::QuotaConfig>),
     }
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "deserialization-only schema mirror in tests")]
     struct UnitSpecForTest<Cfg> {
         #[serde(flatten)]
         sched: SchedulingCfg,
@@ -62,15 +64,19 @@ type = "Mem"
 poll_interval = 0.5
 "#;
 
-        let cfg: RootConfigForTest = toml::from_str(text).unwrap();
-        assert_eq!(cfg.units.len(), 2);
-        assert!((cfg.global.min_polling_interval - 0.15).abs() < f64::EPSILON);
+        let cfg = toml::from_str::<RootConfigForTest>(text).ok();
+        assert!(cfg.is_some(), "minimal config failed to parse");
+
+        if let Some(cfg) = cfg {
+            assert_eq!(cfg.units.len(), 2);
+            assert!((cfg.global.min_polling_interval - 0.15).abs() < f64::EPSILON);
+        }
     }
 
     #[test]
     fn example_config_parses() {
         let text = include_str!("../config.example.toml");
-        let _: RootConfigForTest = toml::from_str(text).unwrap();
+        assert!(toml::from_str::<RootConfigForTest>(text).is_ok());
     }
 
     #[test]
@@ -85,6 +91,6 @@ type = "Disk"
 poll_interval = 0.333
 partlabel = "ROOT"
 "#;
-        let _: RootConfigForTest = toml::from_str(text).unwrap();
+        assert!(toml::from_str::<RootConfigForTest>(text).is_ok());
     }
 }

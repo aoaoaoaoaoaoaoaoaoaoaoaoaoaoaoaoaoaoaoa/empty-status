@@ -7,7 +7,7 @@ use reqwest::Url;
 use serde::{Deserialize, Deserializer};
 use serde_inline_default::serde_inline_default;
 use serde_repr::Deserialize_repr;
-use serde_with::{serde_as, DeserializeAs};
+use serde_with::{DeserializeAs, serde_as};
 use std::time::Instant;
 
 use crate::machine::effects::{EffectReq, HttpCacheKey, HttpGet, HttpPolicy};
@@ -285,12 +285,12 @@ impl Weather {
             .map_err(|e| crate::machine::types::PollError::Unit(WeatherError(e.to_string())))?;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("latitude", &format!("{:.4}", self.cfg.lat));
-            qp.append_pair("longitude", &format!("{:.4}", self.cfg.lon));
+            let _ = qp.append_pair("latitude", &format!("{:.4}", self.cfg.lat));
+            let _ = qp.append_pair("longitude", &format!("{:.4}", self.cfg.lon));
             // Superset request: one payload backs both Now and Forecast views.
-            qp.append_pair("current", "temperature_2m,weathercode");
-            qp.append_pair("hourly", "temperature_2m,weathercode");
-            qp.append_pair("forecast_days", "2");
+            let _ = qp.append_pair("current", "temperature_2m,weathercode");
+            let _ = qp.append_pair("hourly", "temperature_2m,weathercode");
+            let _ = qp.append_pair("forecast_days", "2");
         }
 
         let key = HttpCacheKey::new(format!(
@@ -461,7 +461,7 @@ impl Weather {
 }
 
 impl Weather {
-    pub fn fix_up_and_validate(&mut self) -> anyhow::Result<()> {
+    pub fn fix_up_and_validate(&mut self) -> Result<()> {
         let cfg = &mut self.cfg;
         if cfg.refresh_interval_sec < MIN_REFRESH_INTERVAL {
             tracing::warn!(

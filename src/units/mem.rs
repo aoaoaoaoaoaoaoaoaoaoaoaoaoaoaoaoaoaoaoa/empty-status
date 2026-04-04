@@ -13,7 +13,7 @@ pub struct MemConfig {}
 
 #[derive(Debug)]
 pub struct Mem {
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "retained for future unit-local tuning")]
     cfg: MemConfig,
     mode: DisplayMode,
 }
@@ -50,7 +50,7 @@ impl Mem {
 
     fn read_formatted_worst_rss() -> Markup {
         let mut sys = System::new();
-        sys.refresh_processes(ProcessesToUpdate::All, true);
+        let _ = sys.refresh_processes(ProcessesToUpdate::All, true);
         sys.refresh_memory();
         let mut max_name = "";
         let mut max_rss_bytes = 0;

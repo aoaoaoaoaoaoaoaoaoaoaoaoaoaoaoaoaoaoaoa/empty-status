@@ -85,7 +85,7 @@ impl Bat {
                     .unwrap_or(k)
                     .to_ascii_lowercase();
                 let val = v.trim().to_ascii_lowercase();
-                out.insert(key, val);
+                let _ = out.insert(key, val);
             }
         }
         Ok(out)

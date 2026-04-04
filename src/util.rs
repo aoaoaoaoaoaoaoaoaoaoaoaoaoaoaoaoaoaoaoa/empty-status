@@ -43,7 +43,7 @@ where
 {
     lambda_sec: f64,
     value: Option<EmaRecord<T>>,
-    _marker: std::marker::PhantomData<T>,
+    _marker: PhantomData<T>,
 }
 
 impl<T> Ema<T>
@@ -95,17 +95,18 @@ mod tests {
 
         // Step 0: initialise with 0
         s.feed(0.0, t0);
-        assert!((s.read().unwrap() - 0.0).abs() < 1e-12);
+        let v0 = s.read().copied().unwrap_or(f64::NAN);
+        assert!((v0 - 0.0).abs() < 1e-12);
 
         // Step 1: after 1 s feed 10
         s.feed(10.0, t0 + Duration::from_secs(1));
-        let v1 = *s.read().unwrap();
+        let v1 = s.read().copied().unwrap_or(f64::NAN);
         let expected_v1 = 10.0 * (1.0 - f64::consts::E.powf(-1.0));
         assert!((v1 - expected_v1).abs() < 1e-9);
 
         // Step 2: after another 1 s feed another 10
         s.feed(10.0, t0 + Duration::from_secs(2));
-        let v2 = s.read().unwrap();
+        let v2 = s.read().copied().unwrap_or(f64::NAN);
         let expected_v2 = v1 * f64::consts::E.powf(-1.0) + 10.0 * (1.0 - f64::consts::E.powf(-1.0));
         assert!((v2 - expected_v2).abs() < 1e-9);
     }

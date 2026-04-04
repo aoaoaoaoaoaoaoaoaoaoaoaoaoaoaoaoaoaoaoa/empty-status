@@ -1,5 +1,5 @@
 use crate::core::{ClickEvent, GREEN, GREY, ORANGE, RED, VIOLET};
-use crate::display::{color_by_pct_custom, COL_USE_HIGH, COL_USE_NORM, COL_USE_VERY_HIGH};
+use crate::display::{COL_USE_HIGH, COL_USE_NORM, COL_USE_VERY_HIGH, color_by_pct_custom};
 use crate::mode_enum;
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
@@ -48,7 +48,10 @@ pub struct Net {
     ping_last_seq: u32,
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "kept for ping output compatibility with ping parser"
+)]
 #[derive(Debug, Deserialize)]
 struct PingOutput {
     // Typical line: "64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=25.6 ms"
@@ -80,7 +83,7 @@ impl Net {
     fn refresh_ping_buffer_from(&mut self, lines: Vec<String>) {
         for line in lines {
             if self.ping_times.len() == self.cfg.ping_window {
-                self.ping_times.pop_front();
+                let _ = self.ping_times.pop_front();
             }
 
             let slice = line.as_str();

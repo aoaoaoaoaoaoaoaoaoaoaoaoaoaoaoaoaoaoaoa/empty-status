@@ -30,6 +30,7 @@ error framing. The output path is fully typed until the final i3bar serializatio
 - `src/render/markup.rs`: typed markup builder for output.
 - `src/config.rs`: config parsing, scheduling policy, and unit wiring.
 - `src/units/*`: domain logic and state for each unit (no direct IO).
+- `src/machine/units/quota.rs`: local quota probe machine for Codex and Claude Code telemetry.
 
 ### Runtime model
 
@@ -56,13 +57,19 @@ Effect requests (`EffectReq`):
 - `HttpGet`: HTTP fetch with host-level rate limiting and cache freshness.
 - `FsRead`: file read with cache freshness.
 - `FsListDir`: directory listing with cache freshness.
-- `ProcBatch`: persistent subprocess reader with bounded line drain.
+- `ProcBatch`: persistent subprocess reader with bounded line drain and restart-on-disconnect semantics.
 
 Effect outputs (`EffectOut`) are converted via `EffectOut::expect<T>()` to
 eliminate stringly downcasts and keep callsites typed.
 
 Rate limiting and caching are enforced in the engine. Units specify policies;
 the engine enforces them.
+
+The `Quota` unit uses `ProcBatch` as a local probe: it runs a short Python
+probe that reads documented or tool-produced local artifacts for Codex and
+Claude Code rate-limit state, emits a typed JSON snapshot, and lets the unit
+render remaining weekly and five-hour capacity. Clicking the unit toggles an
+expanded view that reveals rollover times and source freshness.
 
 ### Rendering
 
@@ -93,7 +100,7 @@ the runtime.
 
 Config is TOML with strict schemas:
 
-- Global settings at top-level.
+- Global settings under `[global]`.
 - Units defined in `[[units]]` with `type` and per-unit fields.
 - Unknown keys are rejected.
 

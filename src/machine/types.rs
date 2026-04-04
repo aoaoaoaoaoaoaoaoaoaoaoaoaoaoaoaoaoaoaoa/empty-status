@@ -1,4 +1,5 @@
 use crate::render::markup::Markup;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
@@ -20,7 +21,7 @@ pub enum Availability<T, E> {
     Failed(E),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "reserved constructor kept for future call sites")]
 impl<T, E> Availability<T, E> {
     pub fn loading() -> Self {
         Self::Loading
@@ -39,7 +40,10 @@ impl View {
     }
 
     // kept for symmetry with `ok`, but runtime owns error rendering now
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "explicit constructor retained for typed view symmetry"
+    )]
     #[must_use]
     pub fn error(body: Markup) -> Self {
         Self {
@@ -119,7 +123,11 @@ pub(crate) trait UnitMachine: Send + Sync + std::fmt::Debug + 'static {
         &self,
         effects: &crate::machine::effects::EffectEngine,
         state: &mut Self::State,
-    ) -> impl std::future::Future<Output = Result<Self::PollOut, PollError<Self::UnitError>>> + Send;
+    ) -> impl Future<Output = Result<Self::PollOut, PollError<Self::UnitError>>> + Send;
+
+    fn poll_timeout(&self) -> Duration {
+        Duration::from_secs(10)
+    }
 
     fn render_unit_error(&self, err: &Self::UnitError) -> Markup {
         Markup::text(err.to_string())
@@ -129,8 +137,5 @@ pub(crate) trait UnitMachine: Send + Sync + std::fmt::Debug + 'static {
         &self,
         state: &mut Self::State,
         out: Self::PollOut,
-    ) -> (
-        Availability<Markup, PollError<Self::UnitError>>,
-        UnitDecision,
-    );
+    ) -> (Availability<View, PollError<Self::UnitError>>, UnitDecision);
 }

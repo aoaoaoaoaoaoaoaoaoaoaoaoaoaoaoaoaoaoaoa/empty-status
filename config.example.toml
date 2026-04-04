@@ -80,3 +80,15 @@ smoothing_window_sec = 0.333
 ping_server = "8.8.8.8"
 # Ping sample window size.
 ping_window = 25
+
+[[units]]
+type = "Quota"
+# Poll cadence (seconds). Values below 15s are clamped to 15s.
+poll_interval = 300.0
+# Codex quota comes from Codex app-server `account/rateLimits/read`.
+# Claude quota comes from a throttled hidden `claude /status` TTY probe plus a shared cache.
+label = "quota"
+# Consider quota data stale after this many seconds.
+stale_after_sec = 1800.0
+# Treat quota data as hard-failed after this many seconds.
+error_after_sec = 86400.0

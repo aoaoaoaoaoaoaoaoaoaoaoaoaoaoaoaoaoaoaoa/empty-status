@@ -81,10 +81,10 @@ impl UnitMachine for DiskMachine {
         effects: &crate::machine::effects::EffectEngine,
         state: &mut Self::State,
     ) -> Result<Self::PollOut, crate::machine::types::PollError<Self::UnitError>> {
-        if state.unit.disk_name().is_none() {
-            if let Some(name) = resolve_disk_name(effects, &state.unit).await? {
-                state.unit.set_disk_name(name);
-            }
+        if state.unit.disk_name().is_none()
+            && let Some(name) = resolve_disk_name(effects, &state.unit).await?
+        {
+            state.unit.set_disk_name(name);
         }
 
         let list_out = effects
@@ -137,10 +137,10 @@ impl UnitMachine for DiskMachine {
         _state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<Markup, crate::machine::types::PollError<Self::UnitError>>,
+        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
         UnitDecision,
     ) {
-        (Availability::Ready(body), UnitDecision::Idle)
+        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
     }
 }
 
@@ -150,18 +150,18 @@ async fn resolve_disk_name(
 ) -> Result<Option<String>, crate::machine::types::PollError<UnitErr>> {
     if let Some(label) = unit.selector_partlabel() {
         let label_path = format!("/dev/disk/by-partlabel/{label}");
-        if let Ok(path) = tokio::fs::read_link(&label_path).await {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                return Ok(Some(name.to_string()));
-            }
+        if let Ok(path) = tokio::fs::read_link(&label_path).await
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+        {
+            return Ok(Some(name.to_string()));
         }
     }
     if let Some(uuid) = unit.selector_partuuid() {
         let uuid_path = format!("/dev/disk/by-partuuid/{uuid}");
-        if let Ok(path) = tokio::fs::read_link(&uuid_path).await {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                return Ok(Some(name.to_string()));
-            }
+        if let Ok(path) = tokio::fs::read_link(&uuid_path).await
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+        {
+            return Ok(Some(name.to_string()));
         }
     }
     Ok(None)

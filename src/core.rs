@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
-use tokio::sync::broadcast::{channel, Sender};
+use tokio::sync::broadcast::{Sender, channel};
 use tracing::warn;
 
 use crate::config::GlobalConfig;
-use crate::machine::runtime::{run_empty_status_machines, MachineWrapper};
+use crate::machine::runtime::{MachineWrapper, run_empty_status_machines};
 
 // Color definitions from the base16 tomorrow theme
 pub const DARK_GREY: &str = "#373B41";
@@ -66,14 +66,14 @@ pub struct ClickEvent {
 pub struct EmptyStatus {
     cfg: GlobalConfig,
     machine_wrappers: Vec<MachineWrapper>,
-    machine_click_tx: tokio::sync::broadcast::Sender<ClickEvent>,
+    machine_click_tx: Sender<ClickEvent>,
 }
 
 impl EmptyStatus {
     pub fn new(
         cfg: GlobalConfig,
         machine_wrappers: Vec<MachineWrapper>,
-        machine_click_tx: tokio::sync::broadcast::Sender<ClickEvent>,
+        machine_click_tx: Sender<ClickEvent>,
     ) -> Self {
         Self {
             cfg,
@@ -84,17 +84,17 @@ impl EmptyStatus {
 
     pub async fn run(self) {
         let (click_tx, _) = channel::<ClickEvent>(16);
-        tokio::spawn(read_clicks_task(click_tx.clone()));
+        drop(tokio::spawn(read_clicks_task(click_tx.clone())));
 
         // bridge i3 click events to machine bus
         {
             let machine_click_tx = self.machine_click_tx.clone();
             let mut legacy_rx = click_tx.subscribe();
-            tokio::spawn(async move {
+            drop(tokio::spawn(async move {
                 while let Ok(click) = legacy_rx.recv().await {
                     let _ = machine_click_tx.send(click);
                 }
-            });
+            }));
         }
 
         run_empty_status_machines(self.machine_wrappers, self.cfg, self.machine_click_tx).await;

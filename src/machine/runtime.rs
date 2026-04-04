@@ -33,22 +33,21 @@ fn render_poll_error<M: UnitMachine>(machine: &M, err: &PollError<M::UnitError>)
     let (health, body) = match err {
         PollError::Transport(TransportError::Timeout) => (
             Health::Error,
-            crate::render::markup::Markup::text(format!("{name}: timeout")).fg(crate::core::RED),
+            crate::render::markup::Markup::text(format!("{name}: timeout")).fg(RED),
         ),
         PollError::Transport(TransportError::Http { status }) => (
             Health::Error,
-            crate::render::markup::Markup::text(format!("{name}: HTTP {status}"))
-                .fg(crate::core::RED),
+            crate::render::markup::Markup::text(format!("{name}: HTTP {status}")).fg(RED),
         ),
         PollError::Transport(TransportError::Transport(msg)) => (
             Health::Error,
-            crate::render::markup::Markup::text(format!("{name}: {msg}")).fg(crate::core::RED),
+            crate::render::markup::Markup::text(format!("{name}: {msg}")).fg(RED),
         ),
         PollError::Unit(e) => (
             Health::Error,
             crate::render::markup::Markup::text(format!("{name}: "))
-                .fg(crate::core::RED)
-                .append(machine.render_unit_error(e).fg(crate::core::RED)),
+                .fg(RED)
+                .append(machine.render_unit_error(e).fg(RED)),
         ),
     };
 
@@ -57,7 +56,7 @@ fn render_poll_error<M: UnitMachine>(machine: &M, err: &PollError<M::UnitError>)
 
 fn render_availability<M: UnitMachine>(
     machine: &M,
-    availability: Availability<crate::render::markup::Markup, PollError<M::UnitError>>,
+    availability: Availability<View, PollError<M::UnitError>>,
 ) -> View {
     match availability {
         Availability::Loading => View {
@@ -68,7 +67,7 @@ fn render_availability<M: UnitMachine>(
             .fg(crate::core::VIOLET),
             health: Health::Degraded,
         },
-        Availability::Ready(body) => View::ok(body),
+        Availability::Ready(view) => view,
         Availability::Failed(err) => render_poll_error(machine, &err),
     }
 }
@@ -89,7 +88,7 @@ pub async fn run_empty_status_machines(
     let mut latest: HashMap<usize, OutputChunk> = HashMap::new();
     for w in &wrappers {
         let view = w.view_rx.borrow().clone();
-        latest.insert(w.handle, make_chunk(&w.i3_name, cfg.padding, &view));
+        let _ = latest.insert(w.handle, make_chunk(&w.i3_name, cfg.padding, &view));
     }
 
     let handles: Vec<usize> = wrappers.iter().map(|w| w.handle).collect();
@@ -113,13 +112,13 @@ pub async fn run_empty_status_machines(
     }
 
     loop {
-        interval.tick().await;
+        let _ = interval.tick().await;
 
         for w in &mut wrappers {
             if w.view_rx.has_changed().unwrap_or(false) {
                 let _ = w.view_rx.borrow_and_update();
                 let view = w.view_rx.borrow().clone();
-                latest.insert(w.handle, make_chunk(&w.i3_name, cfg.padding, &view));
+                let _ = latest.insert(w.handle, make_chunk(&w.i3_name, cfg.padding, &view));
             }
         }
 
@@ -137,7 +136,7 @@ pub async fn run_empty_status_machines(
 
 pub fn spawn_machine_actor<M: UnitMachine>(
     machine: Arc<M>,
-    effects: std::sync::Arc<crate::machine::effects::EffectEngine>,
+    effects: Arc<crate::machine::effects::EffectEngine>,
     cfg: crate::config::SchedulingCfg,
     gcfg: GlobalConfig,
     handle: usize,
@@ -150,10 +149,10 @@ pub fn spawn_machine_actor<M: UnitMachine>(
     let (view_tx, view_rx) = watch::channel(view0);
     let mut click_rx = click_tx.subscribe();
 
-    tokio::spawn(async move {
+    drop(tokio::spawn(async move {
         let mut state = state0;
 
-        let poll_timeout = Duration::from_secs(10);
+        let poll_timeout = machine.poll_timeout();
         let poll_backoff =
             Duration::from_secs_f64(cfg.poll_interval.max(gcfg.min_polling_interval));
         let mut next_poll = tokio::time::Instant::now();
@@ -169,11 +168,11 @@ pub fn spawn_machine_actor<M: UnitMachine>(
 
         let mut poll_tick = tokio::time::interval(poll_interval);
         poll_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        poll_tick.tick().await;
+        let _ = poll_tick.tick().await;
 
         let mut tick = tokio::time::interval(tick_interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        tick.tick().await;
+        let _ = tick.tick().await;
 
         let mut pending_click: Option<crate::core::ClickEvent> = None;
 
@@ -240,7 +239,7 @@ pub fn spawn_machine_actor<M: UnitMachine>(
                 }
             }
         }
-    });
+    }));
 
     MachineWrapper {
         i3_name,

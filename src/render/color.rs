@@ -1,6 +1,6 @@
 use palette::{Clamp, FromColor, Oklab, Srgb};
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "used by user-facing color conversion helpers")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Srgb8 {
     pub r: u8,
@@ -40,27 +40,36 @@ impl Srgb8 {
     }
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "kept for external callers that construct colors directly"
+)]
 impl Srgb8 {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "palette utility exposed for callers without current direct references"
+)]
 #[derive(Debug, Clone, Copy)]
 pub struct Stop {
     pub t: f32,
     pub color: Oklab,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "used indirectly by future callers and tests")]
 #[derive(Debug, Clone)]
 pub struct Gradient {
     stops: Vec<Stop>,
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "public gradient API currently used by weather rendering"
+)]
 impl Gradient {
     pub fn new(mut stops: Vec<Stop>) -> Self {
         stops.sort_by(|a, b| a.t.total_cmp(&b.t));
@@ -94,7 +103,19 @@ impl Gradient {
             }
             prev = *s;
         }
-        let last = *self.stops.last().unwrap();
+        let Some(last) = self.stops.last() else {
+            return [
+                Stop {
+                    t: 0.0,
+                    color: Oklab::from_color(Srgb::new(0.0, 0.0, 0.0)),
+                },
+                Stop {
+                    t: 0.0,
+                    color: Oklab::from_color(Srgb::new(0.0, 0.0, 0.0)),
+                },
+            ];
+        };
+        let last = *last;
         [last, last]
     }
 }

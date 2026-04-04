@@ -36,13 +36,16 @@ impl ClientPool {
         host: &str,
         spec: RateLimitSpec,
     ) -> anyhow::Result<ClientWithMiddleware> {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self
+            .inner
+            .lock()
+            .map_err(|error| anyhow::anyhow!("client pool lock poisoned: {error}"))?;
         if let Some(c) = g.get(host) {
             return Ok(c.clone());
         }
 
         let c = make_http_client(host, spec)?;
-        g.insert(host.to_string(), c.clone());
+        let _ = g.insert(host.to_string(), c.clone());
         Ok(c)
     }
 }

@@ -2,3 +2,5 @@ target
 perf.*
 flamegraph.svg
 .cargo_home
+.claude/
+.codex

@@ -1,6 +1,6 @@
 use crate::render::markup::{Markup, Span, Style};
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "public utility retained for external callers")]
 pub fn to_pango(markup: &Markup) -> String {
     let mut out = String::new();
     for span in markup.spans() {
