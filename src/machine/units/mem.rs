@@ -1,6 +1,6 @@
-use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
-use crate::render::markup::Markup;
+use crate::machine::types::{UnitDecision, UnitMachine, View, loading_view, ready_view};
 use crate::units::mem::{Mem, MemConfig};
+use std::convert::Infallible;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MemMachine;
@@ -16,33 +16,18 @@ pub struct State {
     unit: Mem,
 }
 
-#[derive(Debug, Clone)]
-pub struct UnitErr(String);
-
-impl std::fmt::Display for UnitErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for UnitErr {}
-
 impl UnitMachine for MemMachine {
-    type PollOut = Markup;
+    type PollOut = crate::render::markup::Markup;
     type State = State;
-    type UnitError = UnitErr;
+    type UnitError = Infallible;
 
     fn name(&self) -> &'static str {
         "Mem"
     }
 
     fn init(&self) -> (Self::State, View, UnitDecision) {
-        let unit = Mem::from_cfg(MemConfig {});
-        Mem::fix_up_and_validate();
-        let view = View {
-            body: Markup::text("mem ") + Markup::text("loading").fg(crate::core::VIOLET),
-            health: Health::Degraded,
-        };
+        let unit = Mem::new();
+        let view = loading_view("mem");
 
         (State { unit }, view, UnitDecision::PollNow)
     }
@@ -73,9 +58,12 @@ impl UnitMachine for MemMachine {
         _state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
+        crate::machine::types::Availability<
+            View,
+            crate::machine::types::PollError<Self::UnitError>,
+        >,
         UnitDecision,
     ) {
-        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
+        ready_view(body)
     }
 }

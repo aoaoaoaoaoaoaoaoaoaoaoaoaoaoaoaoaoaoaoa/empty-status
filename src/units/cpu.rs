@@ -116,6 +116,4 @@ impl Cpu {
     pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
         self.mode = DisplayMode::next(self.mode);
     }
-
-    pub fn fix_up_and_validate() {}
 }

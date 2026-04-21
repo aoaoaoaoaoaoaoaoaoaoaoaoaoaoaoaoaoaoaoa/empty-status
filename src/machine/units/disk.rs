@@ -1,7 +1,7 @@
 use crate::machine::effects::{DirEntries, EffectReq, FsListDir, FsRead};
-use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
-use crate::render::markup::Markup;
+use crate::machine::types::{UnitDecision, UnitMachine, View, loading_view, ready_view};
 use crate::units::disk::{Disk, DiskConfig};
+use std::convert::Infallible;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -20,21 +20,10 @@ pub struct State {
     unit: Disk,
 }
 
-#[derive(Debug, Clone)]
-pub struct UnitErr(String);
-
-impl std::fmt::Display for UnitErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for UnitErr {}
-
 impl UnitMachine for DiskMachine {
-    type PollOut = Markup;
+    type PollOut = crate::render::markup::Markup;
     type State = State;
-    type UnitError = UnitErr;
+    type UnitError = Infallible;
 
     fn name(&self) -> &'static str {
         "Disk"
@@ -42,25 +31,7 @@ impl UnitMachine for DiskMachine {
 
     fn init(&self) -> (Self::State, View, UnitDecision) {
         let unit = Disk::from_cfg(self.cfg.clone());
-        Disk::fix_up_and_validate();
-        let (view, decision) = match self.cfg.validate() {
-            Ok(()) => (
-                View {
-                    body: Markup::text("disk ") + Markup::text("loading").fg(crate::core::VIOLET),
-                    health: Health::Degraded,
-                },
-                UnitDecision::PollNow,
-            ),
-            Err(msg) => (
-                View {
-                    body: Markup::text("disk ") + Markup::text(msg).fg(crate::core::RED),
-                    health: Health::Error,
-                },
-                UnitDecision::Idle,
-            ),
-        };
-
-        (State { unit }, view, decision)
+        (State { unit }, loading_view("disk"), UnitDecision::PollNow)
     }
 
     fn on_tick(&self, _state: &mut Self::State) -> (Option<View>, UnitDecision) {
@@ -70,10 +41,9 @@ impl UnitMachine for DiskMachine {
     fn on_click(
         &self,
         _state: &mut Self::State,
-        click: crate::core::ClickEvent,
+        _click: crate::core::ClickEvent,
     ) -> (Option<View>, UnitDecision) {
-        Disk::handle_click(click);
-        (None, UnitDecision::PollNow)
+        (None, UnitDecision::Idle)
     }
 
     async fn poll(
@@ -91,7 +61,7 @@ impl UnitMachine for DiskMachine {
             .run(EffectReq::FsListDir(FsListDir {
                 key: crate::machine::effects::DirKey::new("sys/block"),
                 path: "/sys/block".into(),
-                cache_fresh_for: Duration::from_secs(60),
+                cache_fresh_for: Duration::from_mins(1),
             }))
             .await?;
         let entries = list_out.expect::<DirEntries>()?.0;
@@ -105,7 +75,7 @@ impl UnitMachine for DiskMachine {
                         "sys/block/{root}/queue/hw_sector_size"
                     )),
                     path: format!("/sys/block/{root}/queue/hw_sector_size").into(),
-                    cache_fresh_for: Duration::from_secs(3600),
+                    cache_fresh_for: Duration::from_hours(1),
                 }))
                 .await?;
             sector_size_bytes = Some(out.expect::<bytes::Bytes>()?);
@@ -137,17 +107,20 @@ impl UnitMachine for DiskMachine {
         _state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
+        crate::machine::types::Availability<
+            View,
+            crate::machine::types::PollError<Self::UnitError>,
+        >,
         UnitDecision,
     ) {
-        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
+        ready_view(body)
     }
 }
 
 async fn resolve_disk_name(
     _effects: &crate::machine::effects::EffectEngine,
     unit: &Disk,
-) -> Result<Option<String>, crate::machine::types::PollError<UnitErr>> {
+) -> Result<Option<String>, crate::machine::types::PollError<Infallible>> {
     if let Some(label) = unit.selector_partlabel() {
         let label_path = format!("/dev/disk/by-partlabel/{label}");
         if let Ok(path) = tokio::fs::read_link(&label_path).await

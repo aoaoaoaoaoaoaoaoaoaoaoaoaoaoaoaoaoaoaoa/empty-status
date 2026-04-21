@@ -358,18 +358,18 @@ impl EffectEngine {
             .ok_or_else(|| TransportError::Transport("proc missing".into()))?;
 
         let mut out = Vec::new();
+        let mut channel_closed = false;
         for _ in 0..pb.max_lines {
             match st.rx.try_recv() {
                 Ok(line) => out.push(line),
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    drop_proc = Some("proc disconnected".to_string());
+                    channel_closed = true;
                     break;
                 }
             }
         }
 
-        let mut channel_closed = false;
         if out.is_empty() && spawned_now && drop_proc.is_none() {
             match tokio::time::timeout(pb.startup_grace, st.rx.recv()).await {
                 Ok(Some(line)) => out.push(line),

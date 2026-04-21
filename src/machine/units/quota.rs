@@ -1,11 +1,10 @@
 use crate::core::ClickEvent;
 use crate::machine::effects::{EffectReq, ProcExec};
-use crate::machine::types::{Availability, Health, PollError, UnitDecision, UnitMachine, View};
+use crate::machine::types::{Health, PollError, UnitDecision, UnitMachine, View};
 use crate::render::markup::Markup;
 use crate::units::quota::{Quota, QuotaClickAction, QuotaConfig, QuotaParseError};
 use std::time::{Duration, Instant};
 
-const QUOTA_PROBE: &str = include_str!("quota_probe.py");
 pub const MIN_QUOTA_REFRESH_SECONDS: f64 = 15.0;
 
 #[derive(Debug, Clone)]
@@ -139,16 +138,19 @@ impl UnitMachine for QuotaMachine {
     }
 
     fn poll_timeout(&self) -> Duration {
-        Duration::from_secs(30)
+        Duration::from_secs(45)
     }
 
     fn on_poll_ok(
         &self,
         state: &mut Self::State,
         _out: Self::PollOut,
-    ) -> (Availability<View, PollError<Self::UnitError>>, UnitDecision) {
+    ) -> (
+        crate::machine::types::Availability<View, PollError<Self::UnitError>>,
+        UnitDecision,
+    ) {
         (
-            Availability::Ready(render_view(&state.unit)),
+            crate::machine::types::Availability::Ready(render_view(&state.unit)),
             UnitDecision::Idle,
         )
     }
@@ -163,12 +165,17 @@ fn render_view(unit: &Quota) -> View {
 }
 
 fn quota_probe_command(force_refresh: bool) -> Vec<String> {
-    let mut cmd = vec![
-        "python3".to_string(),
-        "-u".to_string(),
-        "-c".to_string(),
-        QUOTA_PROBE.to_string(),
-    ];
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .or_else(|| {
+            std::env::args_os()
+                .next()
+                .map(|arg| arg.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "empty-status".to_string());
+
+    let mut cmd = vec![exe, super::quota_probe::PROBE_ARG.to_string()];
     if force_refresh {
         cmd.push("--force".to_string());
     }

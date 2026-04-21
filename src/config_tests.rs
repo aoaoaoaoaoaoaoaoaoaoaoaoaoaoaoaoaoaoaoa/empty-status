@@ -93,4 +93,20 @@ partlabel = "ROOT"
 "#;
         assert!(toml::from_str::<RootConfigForTest>(text).is_ok());
     }
+
+    #[test]
+    fn disk_unit_rejects_multiple_selectors() {
+        let text = r#"
+[global]
+min_polling_interval = 0.25
+padding = 1
+
+[[units]]
+type = "Disk"
+poll_interval = 0.333
+disk = "nvme0n1p1"
+partlabel = "ROOT"
+"#;
+        assert!(toml::from_str::<RootConfigForTest>(text).is_err());
+    }
 }

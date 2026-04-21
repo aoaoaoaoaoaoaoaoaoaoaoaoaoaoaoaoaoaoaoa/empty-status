@@ -1,4 +1,4 @@
-use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
+use crate::machine::types::{Health, UnitDecision, UnitMachine, View, loading_view, ready_view};
 use crate::render::markup::Markup;
 use crate::units::weather::{Weather, WeatherConfig, WeatherError};
 
@@ -55,10 +55,7 @@ impl UnitMachine for WeatherMachine {
         let mut unit = Weather::from_cfg(self.cfg.clone());
         // validate once at startup
         let view = match unit.fix_up_and_validate() {
-            Ok(()) => View {
-                body: Markup::text("weather ") + Markup::text("loading").fg(crate::core::VIOLET),
-                health: Health::Degraded,
-            },
+            Ok(()) => loading_view("weather"),
             Err(e) => View {
                 body: Markup::text("weather ") + Markup::text(e.to_string()).fg(crate::core::RED),
                 health: Health::Error,
@@ -136,7 +133,10 @@ impl UnitMachine for WeatherMachine {
         state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
+        crate::machine::types::Availability<
+            View,
+            crate::machine::types::PollError<Self::UnitError>,
+        >,
         UnitDecision,
     ) {
         // `read_markup()` already applied caching/poll-if-needed and rendered the correct mode.
@@ -148,6 +148,6 @@ impl UnitMachine for WeatherMachine {
             }
         }
 
-        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
+        ready_view(body)
     }
 }

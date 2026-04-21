@@ -1,8 +1,8 @@
-use crate::core::{ClickEvent, VIOLET};
+use crate::core::ClickEvent;
 use crate::machine::effects::{EffectReq, FsRead, ProcBatch, ProcKey};
-use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
-use crate::render::markup::Markup;
+use crate::machine::types::{UnitDecision, UnitMachine, View, loading_view, ready_view};
 use crate::units::net::{Net, NetConfig};
+use std::convert::Infallible;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -16,41 +16,26 @@ impl NetMachine {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct State {
-    unit: Option<Net>,
+    unit: Net,
 }
-
-#[derive(Debug, Clone)]
-pub struct UnitErr(String);
-
-impl std::fmt::Display for UnitErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for UnitErr {}
 
 impl UnitMachine for NetMachine {
-    type PollOut = Markup;
+    type PollOut = crate::render::markup::Markup;
     type State = State;
-    type UnitError = UnitErr;
+    type UnitError = Infallible;
 
     fn name(&self) -> &'static str {
         "Net"
     }
 
     fn init(&self) -> (Self::State, View, UnitDecision) {
-        let view = View {
-            body: Markup::text("net ") + Markup::text("loading").fg(VIOLET),
-            health: Health::Degraded,
-        };
         (
             State {
-                unit: Some(Net::from_cfg(self.cfg.clone())),
+                unit: Net::from_cfg(self.cfg.clone()),
             },
-            view,
+            loading_view("net"),
             UnitDecision::PollNow,
         )
     }
@@ -60,10 +45,7 @@ impl UnitMachine for NetMachine {
     }
 
     fn on_click(&self, state: &mut Self::State, click: ClickEvent) -> (Option<View>, UnitDecision) {
-        let Some(unit) = state.unit.as_mut() else {
-            return (None, UnitDecision::PollNow);
-        };
-        unit.handle_click(click);
+        state.unit.handle_click(click);
 
         // Mode transitions own background task lifetime.
         // In practice, `Net` already starts/stops ping in `handle_click`.
@@ -75,26 +57,20 @@ impl UnitMachine for NetMachine {
         effects: &crate::machine::effects::EffectEngine,
         state: &mut Self::State,
     ) -> Result<Self::PollOut, crate::machine::types::PollError<Self::UnitError>> {
-        let Some(unit) = state.unit.as_mut() else {
-            return Err(crate::machine::types::PollError::Unit(UnitErr(
-                "missing net unit".into(),
-            )));
-        };
-
-        if unit.mode == crate::units::net::DisplayMode::Ping {
+        if state.unit.mode == crate::units::net::DisplayMode::Ping {
             let key = ProcKey::new(format!(
                 "ping:{}:{}",
-                unit.cfg.interface, unit.cfg.ping_server
+                state.unit.cfg.interface, state.unit.cfg.ping_server
             ));
             let cmd = vec![
                 "ping".to_string(),
                 "-n".to_string(),
                 "-O".to_string(),
                 "-I".to_string(),
-                unit.cfg.interface.clone(),
-                unit.cfg.ping_server.clone(),
+                state.unit.cfg.interface.clone(),
+                state.unit.cfg.ping_server.clone(),
             ];
-            let lines = match effects
+            let lines = effects
                 .run(EffectReq::ProcBatch(ProcBatch {
                     key,
                     cmd,
@@ -102,28 +78,23 @@ impl UnitMachine for NetMachine {
                     startup_grace: Duration::from_millis(250),
                 }))
                 .await
-            {
-                Ok(crate::machine::effects::EffectOut::ProcLines(lines)) => lines,
-                Ok(_) => Vec::new(),
-                Err(e) => {
-                    return Err(crate::machine::types::PollError::Transport(e));
-                }
-            };
-            Ok(unit.read_formatted_ping(lines))
+                .map_err(crate::machine::types::PollError::Transport)?
+                .expect::<Vec<String>>()?;
+            Ok(state.unit.read_formatted_ping(lines))
         } else {
             let carrier = effects
                 .run(EffectReq::FsRead(FsRead {
                     key: crate::machine::effects::FsKey::new(format!(
                         "sys/class/net/{}/carrier",
-                        unit.cfg.interface
+                        state.unit.cfg.interface
                     )),
-                    path: format!("/sys/class/net/{}/carrier", unit.cfg.interface).into(),
+                    path: format!("/sys/class/net/{}/carrier", state.unit.cfg.interface).into(),
                     cache_fresh_for: Duration::from_millis(500),
                 }))
                 .await
                 .ok()
                 .and_then(|out| out.expect::<bytes::Bytes>().ok());
-            Ok(unit.read_formatted_stats(carrier.as_deref()))
+            Ok(state.unit.read_formatted_stats(carrier.as_deref()))
         }
     }
 
@@ -132,9 +103,12 @@ impl UnitMachine for NetMachine {
         _state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
+        crate::machine::types::Availability<
+            View,
+            crate::machine::types::PollError<Self::UnitError>,
+        >,
         UnitDecision,
     ) {
-        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
+        ready_view(body)
     }
 }

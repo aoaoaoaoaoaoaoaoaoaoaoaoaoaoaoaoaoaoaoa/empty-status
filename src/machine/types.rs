@@ -16,19 +16,9 @@ pub struct View {
 
 #[derive(Debug, Clone)]
 pub enum Availability<T, E> {
-    Loading,
     Ready(T),
     Failed(E),
 }
-
-#[allow(dead_code, reason = "reserved constructor kept for future call sites")]
-impl<T, E> Availability<T, E> {
-    pub fn loading() -> Self {
-        Self::Loading
-    }
-}
-
-// Intentionally minimal; grow as use-sites demand.
 
 impl View {
     #[must_use]
@@ -38,25 +28,20 @@ impl View {
             health: Health::Ok,
         }
     }
-
-    // kept for symmetry with `ok`, but runtime owns error rendering now
-    #[allow(
-        dead_code,
-        reason = "explicit constructor retained for typed view symmetry"
-    )]
-    #[must_use]
-    pub fn error(body: Markup) -> Self {
-        Self {
-            body,
-            health: Health::Error,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnitDecision {
     Idle,
     PollNow,
+}
+
+#[must_use]
+pub fn loading_view(label: &str) -> View {
+    View {
+        body: Markup::text(format!("{label} ")) + Markup::text("loading").fg(crate::core::VIOLET),
+        health: Health::Degraded,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +85,11 @@ impl<E> From<anyhow::Error> for PollError<E> {
     fn from(value: anyhow::Error) -> Self {
         Self::Transport(TransportError::Transport(value.to_string()))
     }
+}
+
+#[must_use]
+pub fn ready_view<E>(body: Markup) -> (Availability<View, PollError<E>>, UnitDecision) {
+    (Availability::Ready(View::ok(body)), UnitDecision::Idle)
 }
 
 pub(crate) trait UnitMachine: Send + Sync + std::fmt::Debug + 'static {

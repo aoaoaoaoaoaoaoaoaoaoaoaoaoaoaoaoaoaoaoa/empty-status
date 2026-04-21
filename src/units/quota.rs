@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local, TimeZone, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_inline_default::serde_inline_default;
 
 use crate::core::{GREY, VIOLET};
@@ -18,20 +18,20 @@ pub struct QuotaConfig {
     pub error_after_sec: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProbeSnapshot {
     pub codex: Option<CodexQuota>,
     pub claude: Option<ClaudeQuota>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CodexQuota {
     pub captured_at: String,
     pub weekly_used_percent: u8,
     pub weekly_resets_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaudeQuota {
     pub captured_at: String,
     pub weekly_used_percent: u8,
@@ -136,9 +136,13 @@ impl Quota {
             );
         }
         if let Some(snapshot) = latest {
-            self.latest = Some(snapshot);
+            self.update(snapshot);
         }
         Ok(())
+    }
+
+    pub fn update(&mut self, snapshot: ProbeSnapshot) {
+        self.latest = Some(snapshot);
     }
 
     pub fn render(&self) -> QuotaRender {

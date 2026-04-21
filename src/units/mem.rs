@@ -13,15 +13,12 @@ pub struct MemConfig {}
 
 #[derive(Debug)]
 pub struct Mem {
-    #[allow(dead_code, reason = "retained for future unit-local tuning")]
-    cfg: MemConfig,
     mode: DisplayMode,
 }
 
 impl Mem {
-    pub fn from_cfg(cfg: MemConfig) -> Self {
+    pub fn new() -> Self {
         Self {
-            cfg,
             mode: DisplayMode::Totals,
         }
     }
@@ -95,6 +92,4 @@ impl Mem {
     pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
         self.mode = DisplayMode::next(self.mode);
     }
-
-    pub fn fix_up_and_validate() {}
 }

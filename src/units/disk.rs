@@ -2,15 +2,22 @@ use crate::core::{BLUE, BROWN, ORANGE, VIOLET};
 use crate::render::markup::Markup;
 use crate::util::{Ema, Smoother};
 use cute::c;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_inline_default::serde_inline_default;
 use std::time::Instant;
 use tracing::info;
 const BARS: &[&str; 9] = &[" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
+#[derive(Debug, Clone)]
+enum DiskSelector {
+    Name(String),
+    PartLabel(String),
+    PartUuid(String),
+}
+
 #[serde_inline_default]
-#[derive(Debug, Clone, Deserialize)]
-pub struct DiskConfig {
+#[derive(Debug, Deserialize)]
+struct RawDiskConfig {
     #[serde(default)]
     disk: Option<String>,
     #[serde(default)]
@@ -28,15 +35,50 @@ pub struct DiskConfig {
     read_peak_ref: f64,
 }
 
-impl DiskConfig {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        let has_any_selector =
-            self.disk.is_some() || self.partlabel.is_some() || self.partuuid.is_some();
-        if has_any_selector {
-            Ok(())
-        } else {
-            Err("Disk: missing selector: set `disk` or `partlabel` or `partuuid`")
-        }
+#[derive(Debug, Clone)]
+pub struct DiskConfig {
+    selector: DiskSelector,
+    smoothing_sec: f64,
+    write_peak_ref: f64,
+    read_peak_ref: f64,
+}
+
+impl<'de> Deserialize<'de> for DiskConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let RawDiskConfig {
+            disk,
+            partlabel,
+            partuuid,
+            smoothing_sec,
+            write_peak_ref,
+            read_peak_ref,
+        } = RawDiskConfig::deserialize(deserializer)?;
+
+        let selector = match (disk, partlabel, partuuid) {
+            (Some(disk), None, None) => DiskSelector::Name(disk),
+            (None, Some(partlabel), None) => DiskSelector::PartLabel(partlabel),
+            (None, None, Some(partuuid)) => DiskSelector::PartUuid(partuuid),
+            (None, None, None) => {
+                return Err(serde::de::Error::custom(
+                    "Disk: missing selector: set exactly one of `disk`, `partlabel`, or `partuuid`",
+                ));
+            }
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "Disk: selectors are mutually exclusive: set exactly one of `disk`, `partlabel`, or `partuuid`",
+                ));
+            }
+        };
+
+        Ok(Self {
+            selector,
+            smoothing_sec,
+            write_peak_ref,
+            read_peak_ref,
+        })
     }
 }
 
@@ -61,10 +103,9 @@ impl Disk {
         // TODO evetually we'll make these Results and handle construction with toml config
         let sector_size = None;
         let (last_r, last_w): (u64, u64) = (0, 0);
-        let name = if cfg.partlabel.is_none() && cfg.partuuid.is_none() {
-            cfg.disk.clone()
-        } else {
-            None
+        let name = match &cfg.selector {
+            DiskSelector::Name(disk) => Some(disk.clone()),
+            DiskSelector::PartLabel(_) | DiskSelector::PartUuid(_) => None,
         };
 
         let read_threshs = c![cfg.read_peak_ref.powf(i as f64 /9.0), for i in 1..10];
@@ -130,21 +171,25 @@ impl Disk {
     }
 
     pub fn display_name(&self) -> &str {
-        if let Some(label) = self.cfg.partlabel.as_deref() {
-            return label;
+        match &self.cfg.selector {
+            DiskSelector::Name(disk) => disk,
+            DiskSelector::PartLabel(label) => label,
+            DiskSelector::PartUuid(uuid) => uuid,
         }
-        if let Some(uuid) = self.cfg.partuuid.as_deref() {
-            return uuid;
-        }
-        self.cfg.disk.as_deref().unwrap_or("<invalid disk cfg>")
     }
 
     pub fn selector_partlabel(&self) -> Option<&str> {
-        self.cfg.partlabel.as_deref()
+        match &self.cfg.selector {
+            DiskSelector::PartLabel(label) => Some(label),
+            DiskSelector::Name(_) | DiskSelector::PartUuid(_) => None,
+        }
     }
 
     pub fn selector_partuuid(&self) -> Option<&str> {
-        self.cfg.partuuid.as_deref()
+        match &self.cfg.selector {
+            DiskSelector::PartUuid(uuid) => Some(uuid),
+            DiskSelector::Name(_) | DiskSelector::PartLabel(_) => None,
+        }
     }
 }
 
@@ -218,8 +263,4 @@ impl Disk {
                 .append(Markup::text(w_bar).fg(ORANGE)),
         ))
     }
-
-    pub fn handle_click(_click: crate::core::ClickEvent) {}
-
-    pub fn fix_up_and_validate() {}
 }

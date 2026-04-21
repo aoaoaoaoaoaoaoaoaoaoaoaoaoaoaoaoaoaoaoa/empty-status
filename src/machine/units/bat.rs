@@ -1,7 +1,7 @@
 use crate::machine::effects::{EffectReq, FsRead};
-use crate::machine::types::{Availability, Health, UnitDecision, UnitMachine, View};
-use crate::render::markup::Markup;
+use crate::machine::types::{UnitDecision, UnitMachine, View, loading_view, ready_view};
 use crate::units::bat::{Bat, BatConfig};
+use std::convert::Infallible;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -20,21 +20,10 @@ pub struct State {
     unit: Bat,
 }
 
-#[derive(Debug, Clone)]
-pub struct UnitErr(String);
-
-impl std::fmt::Display for UnitErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for UnitErr {}
-
 impl UnitMachine for BatMachine {
-    type PollOut = Markup;
+    type PollOut = crate::render::markup::Markup;
     type State = State;
-    type UnitError = UnitErr;
+    type UnitError = Infallible;
 
     fn name(&self) -> &'static str {
         "Bat"
@@ -42,11 +31,7 @@ impl UnitMachine for BatMachine {
 
     fn init(&self) -> (Self::State, View, UnitDecision) {
         let unit = Bat::from_cfg(self.cfg.clone());
-        Bat::fix_up_and_validate();
-        let view = View {
-            body: Markup::text("bat ") + Markup::text("loading").fg(crate::core::VIOLET),
-            health: Health::Degraded,
-        };
+        let view = loading_view("bat");
         (State { unit }, view, UnitDecision::PollNow)
     }
 
@@ -87,9 +72,12 @@ impl UnitMachine for BatMachine {
         _state: &mut Self::State,
         body: Self::PollOut,
     ) -> (
-        Availability<View, crate::machine::types::PollError<Self::UnitError>>,
+        crate::machine::types::Availability<
+            View,
+            crate::machine::types::PollError<Self::UnitError>,
+        >,
         UnitDecision,
     ) {
-        (Availability::Ready(View::ok(body)), UnitDecision::Idle)
+        ready_view(body)
     }
 }

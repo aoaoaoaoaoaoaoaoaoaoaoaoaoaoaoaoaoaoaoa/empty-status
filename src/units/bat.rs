@@ -256,8 +256,6 @@ impl Bat {
         self.mode = DisplayMode::next(self.mode);
     }
 
-    pub fn fix_up_and_validate() {}
-
     pub fn uevent_path(&self) -> &str {
         &self.uevent_path
     }

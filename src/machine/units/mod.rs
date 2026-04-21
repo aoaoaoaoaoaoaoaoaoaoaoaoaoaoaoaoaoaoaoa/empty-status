@@ -4,6 +4,7 @@ pub mod disk;
 pub mod mem;
 pub mod net;
 pub mod quota;
+pub(crate) mod quota_probe;
 pub mod time;
 pub mod weather;
 pub mod wifi;

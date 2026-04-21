@@ -30,7 +30,8 @@ error framing. The output path is fully typed until the final i3bar serializatio
 - `src/render/markup.rs`: typed markup builder for output.
 - `src/config.rs`: config parsing, scheduling policy, and unit wiring.
 - `src/units/*`: domain logic and state for each unit (no direct IO).
-- `src/machine/units/quota.rs`: local quota probe machine for Codex and Claude Code telemetry.
+- `src/machine/units/quota.rs`: quota machine for Codex and Claude Code telemetry.
+- `src/machine/units/quota_probe.rs`: hidden Rust self-probe for local quota sources.
 
 ### Runtime model
 
@@ -65,11 +66,12 @@ eliminate stringly downcasts and keep callsites typed.
 Rate limiting and caching are enforced in the engine. Units specify policies;
 the engine enforces them.
 
-The `Quota` unit uses `ProcBatch` as a local probe: it runs a short Python
-probe that reads documented or tool-produced local artifacts for Codex and
-Claude Code rate-limit state, emits a typed JSON snapshot, and lets the unit
-render remaining weekly and five-hour capacity. Clicking the unit toggles an
-expanded view that reveals rollover times and source freshness.
+The `Quota` unit uses `ProcExec` to invoke the current binary as a hidden Rust
+self-probe. The probe reads Codex quota through `codex app-server --listen
+stdio://` and `account/rateLimits/read`, reads Claude Code quota through a
+throttled hidden `/status` TTY probe plus cache, emits a typed JSON snapshot,
+and lets the unit render remaining weekly and five-hour capacity. Clicking the
+unit toggles an expanded view that reveals rollover times and source freshness.
 
 ### Rendering
 
@@ -102,6 +104,7 @@ Config is TOML with strict schemas:
 
 - Global settings under `[global]`.
 - Units defined in `[[units]]` with `type` and per-unit fields.
+- Unit-local selector types reject ambiguous multi-field states during deserialization.
 - Unknown keys are rejected.
 
 Config drives both unit construction and scheduling (polling interval per unit).

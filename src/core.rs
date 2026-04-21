@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
-use tokio::sync::broadcast::{Sender, channel};
+use tokio::sync::broadcast::Sender;
 use tracing::warn;
 
 use crate::config::GlobalConfig;
@@ -83,21 +83,10 @@ impl EmptyStatus {
     }
 
     pub async fn run(self) {
-        let (click_tx, _) = channel::<ClickEvent>(16);
-        drop(tokio::spawn(read_clicks_task(click_tx.clone())));
-
-        // bridge i3 click events to machine bus
-        {
-            let machine_click_tx = self.machine_click_tx.clone();
-            let mut legacy_rx = click_tx.subscribe();
-            drop(tokio::spawn(async move {
-                while let Ok(click) = legacy_rx.recv().await {
-                    let _ = machine_click_tx.send(click);
-                }
-            }));
-        }
-
-        run_empty_status_machines(self.machine_wrappers, self.cfg, self.machine_click_tx).await;
+        drop(tokio::spawn(read_clicks_task(
+            self.machine_click_tx.clone(),
+        )));
+        run_empty_status_machines(self.machine_wrappers, self.cfg).await;
     }
 }
 

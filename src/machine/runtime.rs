@@ -59,14 +59,6 @@ fn render_availability<M: UnitMachine>(
     availability: Availability<View, PollError<M::UnitError>>,
 ) -> View {
     match availability {
-        Availability::Loading => View {
-            body: crate::render::markup::Markup::text(format!(
-                "{} loading",
-                machine.name().to_ascii_lowercase()
-            ))
-            .fg(crate::core::VIOLET),
-            health: Health::Degraded,
-        },
         Availability::Ready(view) => view,
         Availability::Failed(err) => render_poll_error(machine, &err),
     }
@@ -78,11 +70,23 @@ fn i3bar_order(handles: &[usize]) -> Vec<usize> {
     out
 }
 
-pub async fn run_empty_status_machines(
-    mut wrappers: Vec<MachineWrapper>,
-    cfg: GlobalConfig,
-    _click_tx: broadcast::Sender<crate::core::ClickEvent>,
-) {
+fn snapshot_line(latest: &HashMap<usize, OutputChunk>, handles: &[usize]) -> String {
+    let mut chunks = Vec::with_capacity(handles.len());
+    for h in handles {
+        if let Some(chunk) = latest.get(h) {
+            chunks.push(serde_json::to_string(chunk).unwrap_or_default());
+        }
+    }
+    format!("[{}],\n", chunks.join(","))
+}
+
+fn emit_snapshot(stdout: &mut impl Write, latest: &HashMap<usize, OutputChunk>, handles: &[usize]) {
+    let line = snapshot_line(latest, handles);
+    let _ = stdout.write_all(line.as_bytes());
+    let _ = stdout.flush();
+}
+
+pub async fn run_empty_status_machines(mut wrappers: Vec<MachineWrapper>, cfg: GlobalConfig) {
     println!("{{\"version\":1,\"click_events\":true}}\n[");
 
     let mut latest: HashMap<usize, OutputChunk> = HashMap::new();
@@ -99,17 +103,8 @@ pub async fn run_empty_status_machines(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // Emit an initial line so i3bar has content immediately.
-    {
-        let mut chunks = Vec::with_capacity(handles.len());
-        for h in &handles {
-            if let Some(chunk) = latest.get(h) {
-                chunks.push(serde_json::to_string(chunk).unwrap_or_default());
-            }
-        }
-        let line = format!("[{}],\n", chunks.join(","));
-        let _ = io::stdout().write_all(line.as_bytes());
-        let _ = io::stdout().flush();
-    }
+    let mut stdout = io::stdout();
+    emit_snapshot(&mut stdout, &latest, &handles);
 
     loop {
         let _ = interval.tick().await;
@@ -122,15 +117,7 @@ pub async fn run_empty_status_machines(
             }
         }
 
-        let mut chunks = Vec::with_capacity(handles.len());
-        for h in &handles {
-            if let Some(chunk) = latest.get(h) {
-                chunks.push(serde_json::to_string(chunk).unwrap_or_default());
-            }
-        }
-        let line = format!("[{}],\n", chunks.join(","));
-        let _ = io::stdout().write_all(line.as_bytes());
-        let _ = io::stdout().flush();
+        emit_snapshot(&mut stdout, &latest, &handles);
     }
 }
 
