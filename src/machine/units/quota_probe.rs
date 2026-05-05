@@ -1,4 +1,4 @@
-use crate::units::quota::{ClaudeQuota, CodexQuota, ProbeSnapshot};
+use crate::units::quota::{ClaudeQuota, CodexQuota, ProbeSnapshot, QuotaProvider, QuotaProviders};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::cmp::Reverse;
@@ -16,6 +16,7 @@ use tokio::time::timeout;
 pub(crate) const PROBE_ARG: &str = "--empty-status-quota-probe";
 
 const FORCE_ARG: &str = "--force";
+pub(crate) const PROVIDER_ARG: &str = "--provider";
 const CODEX_APP_SERVER_TIMEOUT: Duration = Duration::from_secs(6);
 const CODEX_APP_SERVER_ARGS: &[&str] = &["app-server", "--listen", "stdio://"];
 const CODEX_CLIENT_NAME: &str = "empty-status-probe";
@@ -29,41 +30,79 @@ const CLAUDE_STATUS_COMMAND: &[&str] = &[
     "claude", "--model", "haiku", "--effort", "low", "--tools", "",
 ];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ProbeArgs {
     force_refresh: bool,
+    providers: QuotaProviders,
 }
 
 impl ProbeArgs {
-    pub(crate) fn parse<I, S>(args: I) -> Option<Self>
+    pub(crate) fn parse<I, S>(args: I) -> anyhow::Result<Option<Self>>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
         let mut probe = false;
         let mut force_refresh = false;
-        for arg in args {
+        let mut providers = Vec::new();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
             let arg = arg.as_ref();
             if arg == OsStr::new(PROBE_ARG) {
                 probe = true;
             } else if arg == OsStr::new(FORCE_ARG) {
                 force_refresh = true;
+            } else if arg == OsStr::new(PROVIDER_ARG) {
+                let Some(provider) = args.next() else {
+                    anyhow::bail!("{PROVIDER_ARG} requires a provider");
+                };
+                let raw = provider.as_ref().to_string_lossy();
+                let Some(provider) = QuotaProvider::from_arg(&raw) else {
+                    anyhow::bail!("unknown quota provider `{raw}`");
+                };
+                providers.push(provider);
             }
         }
 
-        probe.then_some(Self { force_refresh })
+        if !probe {
+            return Ok(None);
+        }
+
+        let providers = if providers.is_empty() {
+            QuotaProviders::default()
+        } else {
+            QuotaProviders::new(providers)?
+        };
+        Ok(Some(Self {
+            force_refresh,
+            providers,
+        }))
     }
 }
 
 pub(crate) async fn run(args: ProbeArgs) -> anyhow::Result<()> {
-    let snapshot = probe_quota(args.force_refresh).await;
+    let snapshot = probe_quota(args.force_refresh, &args.providers).await;
     let line = serde_json::to_string(&snapshot)?;
     writeln!(std::io::stdout().lock(), "{line}")?;
     Ok(())
 }
 
-async fn probe_quota(force_refresh: bool) -> ProbeSnapshot {
-    let (codex, claude) = tokio::join!(read_codex_quota(), read_claude_quota(force_refresh));
+async fn probe_quota(force_refresh: bool, providers: &QuotaProviders) -> ProbeSnapshot {
+    let read_codex = async {
+        if providers.contains(QuotaProvider::Codex) {
+            read_codex_quota().await
+        } else {
+            None
+        }
+    };
+    let read_claude = async {
+        if providers.contains(QuotaProvider::Claude) {
+            read_claude_quota(force_refresh).await
+        } else {
+            None
+        }
+    };
+    let (codex, claude) = tokio::join!(read_codex, read_claude);
     ProbeSnapshot { codex, claude }
 }
 

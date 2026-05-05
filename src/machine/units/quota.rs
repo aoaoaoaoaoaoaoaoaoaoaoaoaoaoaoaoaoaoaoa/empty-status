@@ -2,7 +2,7 @@ use crate::core::ClickEvent;
 use crate::machine::effects::{EffectReq, ProcExec};
 use crate::machine::types::{Health, PollError, UnitDecision, UnitMachine, View};
 use crate::render::markup::Markup;
-use crate::units::quota::{Quota, QuotaClickAction, QuotaConfig, QuotaParseError};
+use crate::units::quota::{Quota, QuotaClickAction, QuotaConfig, QuotaParseError, QuotaProviders};
 use std::time::{Duration, Instant};
 
 pub const MIN_QUOTA_REFRESH_SECONDS: f64 = 15.0;
@@ -121,7 +121,7 @@ impl UnitMachine for QuotaMachine {
         let force_refresh = state.begin_refresh(Instant::now());
         let lines = effects
             .run(EffectReq::ProcExec(ProcExec {
-                cmd: quota_probe_command(force_refresh),
+                cmd: quota_probe_command(force_refresh, state.unit.providers()),
             }))
             .await
             .map_err(PollError::Transport)?
@@ -164,7 +164,7 @@ fn render_view(unit: &Quota) -> View {
     }
 }
 
-fn quota_probe_command(force_refresh: bool) -> Vec<String> {
+fn quota_probe_command(force_refresh: bool, providers: &QuotaProviders) -> Vec<String> {
     let exe = std::env::current_exe()
         .ok()
         .and_then(|path| path.into_os_string().into_string().ok())
@@ -176,6 +176,10 @@ fn quota_probe_command(force_refresh: bool) -> Vec<String> {
         .unwrap_or_else(|| "empty-status".to_string());
 
     let mut cmd = vec![exe, super::quota_probe::PROBE_ARG.to_string()];
+    for provider in providers.iter() {
+        cmd.push(super::quota_probe::PROVIDER_ARG.to_string());
+        cmd.push(provider.as_arg().to_string());
+    }
     if force_refresh {
         cmd.push("--force".to_string());
     }
@@ -185,12 +189,13 @@ fn quota_probe_command(force_refresh: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{MIN_QUOTA_REFRESH_SECONDS, State, canonical_poll_interval};
-    use crate::units::quota::{Quota, QuotaConfig};
+    use crate::units::quota::{Quota, QuotaConfig, QuotaProviders};
     use std::time::{Duration, Instant};
 
     fn quota() -> Quota {
         Quota::from_cfg(QuotaConfig {
             label: "quota".to_string(),
+            providers: QuotaProviders::default(),
             stale_after_sec: 1800.0,
             error_after_sec: 86400.0,
         })

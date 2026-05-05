@@ -109,4 +109,32 @@ partlabel = "ROOT"
 "#;
         assert!(toml::from_str::<RootConfigForTest>(text).is_err());
     }
+
+    #[test]
+    fn quota_providers_are_selectable() {
+        let text = r#"
+[global]
+min_polling_interval = 0.25
+padding = 1
+
+[[units]]
+type = "Quota"
+providers = ["codex"]
+"#;
+        assert!(toml::from_str::<RootConfigForTest>(text).is_ok());
+    }
+
+    #[test]
+    fn quota_rejects_empty_provider_set() {
+        let text = r#"
+[global]
+min_polling_interval = 0.25
+padding = 1
+
+[[units]]
+type = "Quota"
+providers = []
+"#;
+        assert!(toml::from_str::<RootConfigForTest>(text).is_err());
+    }
 }

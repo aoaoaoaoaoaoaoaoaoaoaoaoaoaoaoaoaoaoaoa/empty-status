@@ -8,7 +8,7 @@ description = "an i3 status bar"
 edition = "2024"
 license = "MIT"
 rust-version = "1.94"
-version = "1.5.1"
+version = "1.6.0"
 
 [workspace.lints.rust]
 elided_lifetimes_in_paths = "deny"

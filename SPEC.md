@@ -67,11 +67,14 @@ Rate limiting and caching are enforced in the engine. Units specify policies;
 the engine enforces them.
 
 The `Quota` unit uses `ProcExec` to invoke the current binary as a hidden Rust
-self-probe. The probe reads Codex quota through `codex app-server --listen
-stdio://` and `account/rateLimits/read`, reads Claude Code quota through a
-throttled hidden `/status` TTY probe plus cache, emits a typed JSON snapshot,
-and lets the unit render remaining weekly and five-hour capacity. Clicking the
-unit toggles an expanded view that reveals rollover times and source freshness.
+self-probe. Its config owns a non-empty ordered provider set. The `codex`
+provider reads quota through `codex app-server --listen stdio://` and
+`account/rateLimits/read`; the `claude` provider reads Claude Code quota through
+a throttled hidden `/status` TTY probe plus cache. Disabled providers are not
+probed, rendered, or included in health. The probe emits a typed JSON snapshot,
+and the unit renders remaining weekly and five-hour capacity for the selected
+providers. Clicking the unit toggles an expanded view that reveals rollover
+times and source freshness.
 
 ### Rendering
 
@@ -105,6 +108,7 @@ Config is TOML with strict schemas:
 - Global settings under `[global]`.
 - Units defined in `[[units]]` with `type` and per-unit fields.
 - Unit-local selector types reject ambiguous multi-field states during deserialization.
+- Quota provider sets are explicit, non-empty, unique, and ordered.
 - Unknown keys are rejected.
 
 Config drives both unit construction and scheduling (polling interval per unit).

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local, TimeZone, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use serde_inline_default::serde_inline_default;
 
 use crate::core::{GREY, VIOLET};
@@ -12,10 +12,28 @@ use crate::render::markup::Markup;
 pub struct QuotaConfig {
     #[serde_inline_default("quota".to_string())]
     pub label: String,
+    #[serde(default)]
+    pub providers: QuotaProviders,
     #[serde_inline_default(1800.0)]
     pub stale_after_sec: f64,
     #[serde_inline_default(86400.0)]
     pub error_after_sec: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuotaProvider {
+    Claude,
+    Codex,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaProviders(Vec<QuotaProvider>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuotaProvidersError {
+    Empty,
+    Duplicate(QuotaProvider),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -80,6 +98,100 @@ impl std::fmt::Display for QuotaParseError {
 
 impl std::error::Error for QuotaParseError {}
 
+impl Default for QuotaProviders {
+    fn default() -> Self {
+        Self(vec![QuotaProvider::Claude, QuotaProvider::Codex])
+    }
+}
+
+impl QuotaProvider {
+    #[must_use]
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+
+    #[must_use]
+    pub fn from_arg(raw: &str) -> Option<Self> {
+        match raw {
+            "claude" => Some(Self::Claude),
+            "codex" => Some(Self::Codex),
+            _ => None,
+        }
+    }
+
+    fn windows(self) -> &'static [QuotaWindow] {
+        match self {
+            Self::Claude => &[QuotaWindow::ClaudeWeekly, QuotaWindow::ClaudeFiveHour],
+            Self::Codex => &[QuotaWindow::CodexWeekly],
+        }
+    }
+}
+
+impl QuotaProviders {
+    pub fn new(providers: Vec<QuotaProvider>) -> Result<Self, QuotaProvidersError> {
+        if providers.is_empty() {
+            return Err(QuotaProvidersError::Empty);
+        }
+
+        let mut seen = Vec::with_capacity(providers.len());
+        for provider in &providers {
+            if seen.contains(provider) {
+                return Err(QuotaProvidersError::Duplicate(*provider));
+            }
+            seen.push(*provider);
+        }
+
+        Ok(Self(providers))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = QuotaProvider> + '_ {
+        self.0.iter().copied()
+    }
+
+    #[must_use]
+    pub fn contains(&self, provider: QuotaProvider) -> bool {
+        self.0.contains(&provider)
+    }
+}
+
+impl<'de> Deserialize<'de> for QuotaProviders {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        Self::new(Vec::<QuotaProvider>::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+impl Serialize for QuotaProviders {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl std::fmt::Display for QuotaProvidersError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("quota provider set cannot be empty"),
+            Self::Duplicate(provider) => write!(f, "duplicate quota provider `{provider}`"),
+        }
+    }
+}
+
+impl std::fmt::Display for QuotaProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_arg())
+    }
+}
+
+impl std::error::Error for QuotaProvidersError {}
+
 impl CodexQuota {
     fn weekly_remaining_percent(&self) -> u8 {
         100_u8.saturating_sub(self.weekly_used_percent)
@@ -108,6 +220,57 @@ enum SourceState {
 enum ResetAt<'a> {
     Exact(i64),
     Label(&'a str),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum QuotaWindow {
+    ClaudeWeekly,
+    ClaudeFiveHour,
+    CodexWeekly,
+}
+
+impl QuotaWindow {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ClaudeWeekly => "cc7",
+            Self::ClaudeFiveHour => "cc5",
+            Self::CodexWeekly => "cx7",
+        }
+    }
+
+    fn remaining_percent(self, snapshot: &ProbeSnapshot) -> Option<u8> {
+        match self {
+            Self::ClaudeWeekly => snapshot
+                .claude
+                .as_ref()
+                .map(ClaudeQuota::weekly_remaining_percent),
+            Self::ClaudeFiveHour => snapshot
+                .claude
+                .as_ref()
+                .map(ClaudeQuota::five_hour_remaining_percent),
+            Self::CodexWeekly => snapshot
+                .codex
+                .as_ref()
+                .map(CodexQuota::weekly_remaining_percent),
+        }
+    }
+
+    fn rollover(self, snapshot: &ProbeSnapshot) -> Option<ResetAt<'_>> {
+        match self {
+            Self::ClaudeWeekly => snapshot
+                .claude
+                .as_ref()
+                .map(|quota| ResetAt::Label(quota.weekly_resets_at.as_str())),
+            Self::ClaudeFiveHour => snapshot
+                .claude
+                .as_ref()
+                .map(|quota| ResetAt::Label(quota.five_hour_resets_at.as_str())),
+            Self::CodexWeekly => snapshot
+                .codex
+                .as_ref()
+                .and_then(|quota| quota.weekly_resets_at.map(ResetAt::Exact)),
+        }
+    }
 }
 
 impl Quota {
@@ -141,6 +304,10 @@ impl Quota {
         Ok(())
     }
 
+    pub fn providers(&self) -> &QuotaProviders {
+        &self.cfg.providers
+    }
+
     pub fn update(&mut self, snapshot: ProbeSnapshot) {
         self.latest = Some(snapshot);
     }
@@ -154,71 +321,26 @@ impl Quota {
             };
         };
 
-        let claude_state = self.source_state(
-            snapshot
-                .claude
-                .as_ref()
-                .map(|quota| quota.captured_at.as_str()),
-        );
-        let codex_state = self.source_state(
-            snapshot
-                .codex
-                .as_ref()
-                .map(|quota| quota.captured_at.as_str()),
-        );
-        let health = Self::render_health(claude_state, codex_state);
-
-        let parts = vec![
-            render_window(
-                "cc7",
-                snapshot
-                    .claude
-                    .as_ref()
-                    .map(ClaudeQuota::weekly_remaining_percent),
-            ),
-            render_window(
-                "cc5",
-                snapshot
-                    .claude
-                    .as_ref()
-                    .map(ClaudeQuota::five_hour_remaining_percent),
-            ),
-            render_window(
-                "cx7",
-                snapshot
-                    .codex
-                    .as_ref()
-                    .map(CodexQuota::weekly_remaining_percent),
-            ),
-        ];
+        let health = self.render_health(snapshot);
+        let parts = self
+            .cfg
+            .providers
+            .iter()
+            .flat_map(|provider| provider.windows().iter().copied())
+            .map(|window| render_window(window.label(), window.remaining_percent(snapshot)))
+            .collect::<Vec<_>>();
 
         let mut body =
             Markup::text(format!("{} ", self.cfg.label)) + Markup::join(Markup::text(" "), parts);
 
         if self.expanded {
-            let detail = vec![
-                render_rollover(
-                    "cc7",
-                    snapshot
-                        .claude
-                        .as_ref()
-                        .map(|quota| ResetAt::Label(quota.weekly_resets_at.as_str())),
-                ),
-                render_rollover(
-                    "cc5",
-                    snapshot
-                        .claude
-                        .as_ref()
-                        .map(|quota| ResetAt::Label(quota.five_hour_resets_at.as_str())),
-                ),
-                render_rollover(
-                    "cx7",
-                    snapshot
-                        .codex
-                        .as_ref()
-                        .and_then(|quota| quota.weekly_resets_at.map(ResetAt::Exact)),
-                ),
-            ];
+            let detail = self
+                .cfg
+                .providers
+                .iter()
+                .flat_map(|provider| provider.windows().iter().copied())
+                .map(|window| render_rollover(window.label(), window.rollover(snapshot)))
+                .collect::<Vec<_>>();
             body = body + Markup::text(" ") + Markup::join(Markup::text(" "), detail);
         }
 
@@ -250,13 +372,36 @@ impl Quota {
         }
     }
 
-    fn render_health(claude: SourceState, codex: SourceState) -> Health {
-        if claude == SourceState::Expired
-            || codex == SourceState::Expired
-            || (claude == SourceState::Missing && codex == SourceState::Missing)
+    fn provider_state(&self, snapshot: &ProbeSnapshot, provider: QuotaProvider) -> SourceState {
+        match provider {
+            QuotaProvider::Claude => self.source_state(
+                snapshot
+                    .claude
+                    .as_ref()
+                    .map(|quota| quota.captured_at.as_str()),
+            ),
+            QuotaProvider::Codex => self.source_state(
+                snapshot
+                    .codex
+                    .as_ref()
+                    .map(|quota| quota.captured_at.as_str()),
+            ),
+        }
+    }
+
+    fn render_health(&self, snapshot: &ProbeSnapshot) -> Health {
+        let states = self
+            .cfg
+            .providers
+            .iter()
+            .map(|provider| self.provider_state(snapshot, provider))
+            .collect::<Vec<_>>();
+
+        if states.contains(&SourceState::Expired)
+            || states.iter().all(|state| *state == SourceState::Missing)
         {
             Health::Error
-        } else if claude == SourceState::Stale || codex == SourceState::Stale {
+        } else if states.contains(&SourceState::Stale) {
             Health::Degraded
         } else {
             Health::Ok
@@ -300,7 +445,7 @@ fn format_rollover_timestamp(timestamp: i64) -> Option<String> {
 mod tests {
     use chrono::Utc;
 
-    use super::{Health, Quota, QuotaClickAction, QuotaConfig};
+    use super::{Health, Quota, QuotaClickAction, QuotaConfig, QuotaProvider, QuotaProviders};
 
     #[test]
     fn render_collapsed_snapshot() {
@@ -312,6 +457,7 @@ mod tests {
 
         let mut quota = Quota::from_cfg(QuotaConfig {
             label: "quota".to_string(),
+            providers: QuotaProviders::default(),
             stale_after_sec: 1800.0,
             error_after_sec: 86400.0,
         });
@@ -335,6 +481,7 @@ mod tests {
 
         let mut quota = Quota::from_cfg(QuotaConfig {
             label: "quota".to_string(),
+            providers: QuotaProviders::default(),
             stale_after_sec: 1800.0,
             error_after_sec: 86400.0,
         });
@@ -367,6 +514,7 @@ mod tests {
     fn right_click_requests_refresh_without_expanding() {
         let mut quota = Quota::from_cfg(QuotaConfig {
             label: "quota".to_string(),
+            providers: QuotaProviders::default(),
             stale_after_sec: 1800.0,
             error_after_sec: 86400.0,
         });
@@ -393,6 +541,7 @@ mod tests {
     fn ignore_middle_click() {
         let mut quota = Quota::from_cfg(QuotaConfig {
             label: "quota".to_string(),
+            providers: QuotaProviders::default(),
             stale_after_sec: 1800.0,
             error_after_sec: 86400.0,
         });
@@ -425,11 +574,37 @@ mod tests {
 
         let mut quota = Quota::from_cfg(QuotaConfig {
             label: "quota".to_string(),
+            providers: QuotaProviders::default(),
             stale_after_sec: 1800.0,
             error_after_sec: 86400.0,
         });
         assert!(quota.update_from_lines(vec![line]).is_ok());
 
+        assert_eq!(quota.render().health, Health::Ok);
+    }
+
+    #[test]
+    fn codex_provider_renders_only_codex_window() {
+        let captured_at = Utc::now().to_rfc3339();
+        let weekly_resets_at = Utc::now().timestamp() + 86400;
+        let line = format!(
+            r#"{{"codex":{{"captured_at":"{captured_at}","weekly_used_percent":36,"weekly_resets_at":{weekly_resets_at}}},"claude":null}}"#
+        );
+
+        let providers = QuotaProviders::new(vec![QuotaProvider::Codex]);
+        assert!(providers.is_ok());
+        let mut quota = Quota::from_cfg(QuotaConfig {
+            label: "quota".to_string(),
+            providers: providers.unwrap_or_else(|_| QuotaProviders::default()),
+            stale_after_sec: 1800.0,
+            error_after_sec: 86400.0,
+        });
+        assert!(quota.update_from_lines(vec![line]).is_ok());
+
+        let body = quota.render().body.to_string();
+        assert!(!body.contains("cc7"));
+        assert!(!body.contains("cc5"));
+        assert!(body.contains("cx7"));
         assert_eq!(quota.render().health, Health::Ok);
     }
 }

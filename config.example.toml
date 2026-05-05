@@ -89,6 +89,8 @@ poll_interval = 300.0
 # Codex quota comes from Codex app-server `account/rateLimits/read`.
 # Claude quota comes from a throttled hidden `claude /status` TTY probe plus a shared cache.
 label = "quota"
+# Enabled quota providers, in render order: "claude" | "codex".
+providers = ["claude", "codex"]
 # Consider quota data stale after this many seconds.
 stale_after_sec = 1800.0
 # Treat quota data as hard-failed after this many seconds.

@@ -42,7 +42,8 @@ fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    if let Some(args) = machine::units::quota_probe::ProbeArgs::parse(std::env::args_os().skip(1)) {
+    if let Some(args) = machine::units::quota_probe::ProbeArgs::parse(std::env::args_os().skip(1))?
+    {
         return machine::units::quota_probe::run(args).await;
     }
 
