@@ -53,7 +53,7 @@ impl UnitMachine for BatMachine {
         effects: &crate::machine::effects::EffectEngine,
         state: &mut Self::State,
     ) -> Result<Self::PollOut, crate::machine::types::PollError<Self::UnitError>> {
-        let out = effects
+        let out = match effects
             .run(EffectReq::FsRead(FsRead {
                 key: crate::machine::effects::FsKey::new(format!(
                     "power/{}",
@@ -62,7 +62,11 @@ impl UnitMachine for BatMachine {
                 path: state.unit.uevent_path().into(),
                 cache_fresh_for: Duration::from_millis(200),
             }))
-            .await?;
+            .await
+        {
+            Ok(out) => out,
+            Err(_) => return Ok(state.unit.missing_markup()),
+        };
         let bytes = out.expect::<bytes::Bytes>()?;
         Ok(state.unit.read_markup_from_bytes(&bytes))
     }

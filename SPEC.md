@@ -59,6 +59,7 @@ Effect requests (`EffectReq`):
 - `FsRead`: file read with cache freshness.
 - `FsListDir`: directory listing with cache freshness.
 - `ProcBatch`: persistent subprocess reader with bounded line drain and restart-on-disconnect semantics.
+- `ProcExec`: one-shot subprocess execution with captured stdout lines.
 
 Effect outputs (`EffectOut`) are converted via `EffectOut::expect<T>()` to
 eliminate stringly downcasts and keep callsites typed.
@@ -112,6 +113,10 @@ Config is TOML with strict schemas:
 - Unknown keys are rejected.
 
 Config drives both unit construction and scheduling (polling interval per unit).
+Top-level TOML and global config are decoded as one document; each `[[units]]`
+entry is decoded independently. A malformed unit stanza renders as an inert red
+config-error chunk at that unit position without preventing neighboring units
+from loading.
 
 ## Extensibility
 

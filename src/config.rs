@@ -5,8 +5,9 @@ use std::{fs, path::PathBuf};
 use tracing::{debug, error, info, warn};
 use xdg::BaseDirectories;
 
-use crate::core::EmptyStatus;
+use crate::core::{EmptyStatus, RED};
 use crate::machine::runtime::{MachineWrapper, spawn_machine_actor};
+use crate::machine::types::{Health, View};
 use crate::machine::units::bat::BatMachine;
 use crate::machine::units::cpu::CpuMachine;
 use crate::machine::units::disk::DiskMachine;
@@ -16,6 +17,7 @@ use crate::machine::units::quota::QuotaMachine;
 use crate::machine::units::time::TimeMachine;
 use crate::machine::units::weather::WeatherMachine;
 use crate::machine::units::wifi::WifiMachine;
+use crate::render::markup::Markup;
 
 const CONFIG_PREFIX: &str = "empty-status";
 const CONFIG_FILE: &str = "config.toml";
@@ -24,7 +26,7 @@ const CONFIG_FILE: &str = "config.toml";
 #[serde(deny_unknown_fields)]
 struct RootConfig {
     #[serde(default)]
-    units: Vec<UnitConfig>,
+    units: Vec<toml::Value>,
     #[serde(default)]
     global: GlobalConfig,
 }
@@ -108,8 +110,17 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
     let mut machine_wrappers: Vec<MachineWrapper> = Vec::new();
     let effects = crate::machine::effects::EffectEngine::new();
 
-    for (handle, uc) in raw.units.iter().enumerate() {
-        let spawn_result: Result<&'static str> = match uc {
+    for (handle, raw_unit) in raw.units.iter().enumerate() {
+        let uc = match decode_unit_config(raw_unit) {
+            Ok(uc) => uc,
+            Err(e) => {
+                error!("Failed to parse unit {handle}: {e}");
+                machine_wrappers.push(config_error_wrapper(handle, &e));
+                continue;
+            }
+        };
+
+        let kind = match &uc {
             UnitConfig::Weather(spec) => {
                 let mach = std::sync::Arc::new(WeatherMachine::new(spec.cfg.clone()));
                 machine_wrappers.push(spawn_machine_actor(
@@ -120,7 +131,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Weather")
+                "Weather"
             }
             UnitConfig::Time(spec) => {
                 let mach = std::sync::Arc::new(TimeMachine::new(spec.cfg.clone()));
@@ -132,7 +143,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Time")
+                "Time"
             }
             UnitConfig::Cpu(spec) => {
                 let mach = std::sync::Arc::new(CpuMachine::new(spec.cfg.clone()));
@@ -144,7 +155,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Cpu")
+                "Cpu"
             }
             UnitConfig::Mem(spec) => {
                 let mach = std::sync::Arc::new(MemMachine::new(spec.cfg));
@@ -156,7 +167,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Mem")
+                "Mem"
             }
             UnitConfig::Disk(spec) => {
                 let mach = std::sync::Arc::new(DiskMachine::new(spec.cfg.clone()));
@@ -168,7 +179,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Disk")
+                "Disk"
             }
             UnitConfig::Wifi(spec) => {
                 let mach = std::sync::Arc::new(WifiMachine::new(spec.cfg.clone()));
@@ -180,7 +191,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Wifi")
+                "Wifi"
             }
             UnitConfig::Bat(spec) => {
                 let mach = std::sync::Arc::new(BatMachine::new(spec.cfg.clone()));
@@ -192,7 +203,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Bat")
+                "Bat"
             }
             UnitConfig::Net(spec) => {
                 let mach = std::sync::Arc::new(NetMachine::new(spec.cfg.clone()));
@@ -204,7 +215,7 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Net")
+                "Net"
             }
             UnitConfig::Quota(spec) => {
                 let mach = std::sync::Arc::new(QuotaMachine::new(spec.cfg.clone()));
@@ -217,23 +228,16 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
                     handle,
                     &click_tx,
                 ));
-                Ok("Quota")
+                "Quota"
             }
             UnitConfig::_External => {
                 warn!("Skipping external unit type (not implemented yet)");
-                Ok("External")
+                "External"
             }
         };
 
-        match spawn_result {
-            Ok(kind) => {
-                info!("Successfully loaded unit '{kind}'");
-                debug!("Unit config: {uc:?}");
-            }
-            Err(e) => {
-                error!("Failed to load unit: {e:#}");
-            }
-        }
+        info!("Successfully loaded unit '{kind}'");
+        debug!("Unit config: {uc:?}");
     }
 
     info!("Using global config: {:?}", raw.global);
@@ -243,6 +247,39 @@ pub fn load_status_from_cfg() -> Result<EmptyStatus> {
 fn canonical_quota_sched(sched: SchedulingCfg) -> SchedulingCfg {
     SchedulingCfg {
         poll_interval: crate::machine::units::quota::canonical_poll_interval(sched.poll_interval),
+    }
+}
+
+fn decode_unit_config(raw: &toml::Value) -> Result<UnitConfig, toml::de::Error> {
+    raw.clone().try_into()
+}
+
+fn config_error_wrapper(handle: usize, error: &toml::de::Error) -> MachineWrapper {
+    let message = clipped_error_message(&error.to_string().replace('\n', " "));
+
+    let body = Markup::text(format!("unit {handle} "))
+        .append(Markup::text("bad config: ").fg(RED))
+        .append(Markup::text(message).fg(RED));
+    let (_view_tx, view_rx) = tokio::sync::watch::channel(View {
+        body,
+        health: Health::Error,
+    });
+
+    MachineWrapper {
+        i3_name: format!("Config::{handle}"),
+        handle,
+        view_rx,
+    }
+}
+
+fn clipped_error_message(message: &str) -> String {
+    const MAX_MESSAGE_CHARS: usize = 160;
+    let mut chars = message.chars();
+    let clipped = chars.by_ref().take(MAX_MESSAGE_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{clipped}…")
+    } else {
+        clipped
     }
 }
 
@@ -261,4 +298,36 @@ type = "Time"
 poll_interval = 1.0
 format = "%a %b %d %Y - %H:%M"
 "#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RootConfig, decode_unit_config};
+
+    #[test]
+    fn malformed_unit_config_does_not_poison_root_decode() {
+        let text = r#"
+[global]
+min_polling_interval = 0.25
+padding = 1
+
+[[units]]
+type = "Time"
+
+[[units]]
+type = "Disk"
+
+[[units]]
+type = "Mem"
+"#;
+        let decoded = toml::from_str::<RootConfig>(text);
+        assert!(decoded.is_ok());
+        let Ok(root) = decoded else {
+            return;
+        };
+        assert_eq!(root.units.len(), 3);
+        assert!(decode_unit_config(&root.units[0]).is_ok());
+        assert!(decode_unit_config(&root.units[1]).is_err());
+        assert!(decode_unit_config(&root.units[2]).is_ok());
+    }
 }

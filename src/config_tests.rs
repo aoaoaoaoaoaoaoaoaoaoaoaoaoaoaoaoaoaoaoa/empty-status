@@ -111,6 +111,27 @@ partlabel = "ROOT"
     }
 
     #[test]
+    fn bat_id_defaults_to_zero() {
+        let text = r#"
+[global]
+min_polling_interval = 0.25
+padding = 1
+
+[[units]]
+type = "Bat"
+"#;
+        let parsed = toml::from_str::<RootConfigForTest>(text);
+        assert!(parsed.is_ok());
+        let Ok(cfg) = parsed else {
+            return;
+        };
+        assert!(matches!(cfg.units.first(), Some(UnitConfigForTest::Bat(_))));
+        if let Some(UnitConfigForTest::Bat(spec)) = cfg.units.first() {
+            assert_eq!(spec.cfg.bat_id, 0);
+        }
+    }
+
+    #[test]
     fn quota_providers_are_selectable() {
         let text = r#"
 [global]

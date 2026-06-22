@@ -48,6 +48,7 @@ impl BatStatus {
 #[serde_inline_default]
 #[derive(Debug, Clone, Deserialize)]
 pub struct BatConfig {
+    #[serde_inline_default(0)]
     pub bat_id: usize,
     #[serde_inline_default(2.5)]
     pub power_smoothing_sec: f64,
@@ -89,6 +90,14 @@ impl Bat {
             }
         }
         Ok(out)
+    }
+
+    fn failure_markup(&self, message: &str) -> Markup {
+        Markup::text(format!("bat{} ", self.cfg.bat_id)).append(Markup::text(message).fg(RED))
+    }
+
+    pub fn missing_markup(&self) -> Markup {
+        self.failure_markup("missing")
     }
 }
 
@@ -176,14 +185,14 @@ impl Bat {
         };
 
         if missing || uevent.get("present").is_some_and(|v| v == "0") {
-            return Markup::text("No battery").fg(RED);
+            return self.failure_markup("absent");
         }
 
         let bi =
             match BatteryInfo::from_charge(&uevent).or_else(|| BatteryInfo::from_energy(&uevent)) {
                 Some(bi) => bi,
                 None => {
-                    return Markup::text("invalid data").fg(RED);
+                    return self.failure_markup("invalid data");
                 }
             };
 
@@ -238,7 +247,7 @@ impl Bat {
         };
         let (br0, br1) = match self.mode {
             DisplayMode::CurCapacity => ("[", "]"),
-            DisplayMode::DesignCapacity => ("&lt;", "&gt;"),
+            DisplayMode::DesignCapacity => ("<", ">"),
         };
         Markup::text("bat ")
             .append(Markup::delimited(
@@ -258,5 +267,51 @@ impl Bat {
 
     pub fn uevent_path(&self) -> &str {
         &self.uevent_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bat, BatConfig};
+
+    fn click() -> crate::core::ClickEvent {
+        crate::core::ClickEvent {
+            name: "Bat::0".to_string(),
+            instance: None,
+            button: 1,
+            modifiers: Vec::new(),
+            x: 0,
+            y: 0,
+            relative_x: 0,
+            relative_y: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    #[test]
+    fn design_capacity_delimiters_are_not_preescaped() {
+        let mut bat = Bat::from_cfg(BatConfig {
+            bat_id: 0,
+            power_smoothing_sec: 2.5,
+        });
+        bat.handle_click(click());
+
+        let rendered = bat
+            .read_markup_from_bytes(
+                b"POWER_SUPPLY_PRESENT=1
+POWER_SUPPLY_STATUS=Discharging
+POWER_SUPPLY_ENERGY_NOW=50000000
+POWER_SUPPLY_ENERGY_FULL=100000000
+POWER_SUPPLY_ENERGY_FULL_DESIGN=120000000
+POWER_SUPPLY_POWER_NOW=10000000
+",
+            )
+            .to_string();
+
+        assert!(rendered.contains("&lt;"));
+        assert!(rendered.contains("&gt;"));
+        assert!(!rendered.contains("&amp;lt;"));
+        assert!(!rendered.contains("&amp;gt;"));
     }
 }
