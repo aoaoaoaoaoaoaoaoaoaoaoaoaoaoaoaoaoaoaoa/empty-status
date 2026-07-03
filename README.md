@@ -99,7 +99,7 @@ Claude Code to let `empty-status` write the shared quota cache:
 {
   "statusLine": {
     "type": "command",
-    "command": "/home/main/.local/bin/empty-status --empty-status-claude-statusline"
+    "command": "/home/main/.local/bin/empty-status-claude-statusline"
   }
 }
 ```

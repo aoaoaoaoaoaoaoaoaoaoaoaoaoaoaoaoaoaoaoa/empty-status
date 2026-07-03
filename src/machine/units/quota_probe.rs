@@ -13,7 +13,6 @@ use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
 
 pub(crate) const PROBE_ARG: &str = "--empty-status-quota-probe";
-pub(crate) const CLAUDE_STATUSLINE_ARG: &str = "--empty-status-claude-statusline";
 
 pub(crate) const PROVIDER_ARG: &str = "--provider";
 const CODEX_APP_SERVER_TIMEOUT: Duration = Duration::from_secs(6);

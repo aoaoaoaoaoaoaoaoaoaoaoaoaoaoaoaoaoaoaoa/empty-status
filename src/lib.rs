@@ -1,0 +1,58 @@
+#![cfg(target_os = "linux")]
+mod config;
+#[cfg(test)]
+mod config_tests;
+mod core;
+mod display;
+mod machine;
+mod render;
+mod units;
+mod util;
+
+use anyhow::Result;
+use tracing::{info, level_filters::LevelFilter};
+use tracing_appender::{
+    non_blocking,
+    rolling::{RollingFileAppender, Rotation},
+};
+use tracing_subscriber::{EnvFilter, fmt};
+
+use crate::config::load_status_from_cfg;
+
+fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
+    let bd = xdg::BaseDirectories::with_prefix("empty-status");
+    let log_dir = bd.get_state_home()?;
+    let file_appender: RollingFileAppender = RollingFileAppender::builder()
+        .rotation(Rotation::NEVER)
+        .filename_prefix("last.log")
+        .build(log_dir)
+        .ok()?;
+    let (non_blocking_appender, guard) = non_blocking(file_appender);
+
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(non_blocking_appender)
+        .init();
+
+    Some(guard)
+}
+
+pub async fn run_bar() -> Result<()> {
+    if let Some(args) = machine::units::quota_probe::ProbeArgs::parse(std::env::args_os().skip(1))?
+    {
+        return machine::units::quota_probe::run(args).await;
+    }
+
+    let _guard = init_file_logger();
+    info!("Starting empty-status!");
+    let status = load_status_from_cfg()?;
+    status.run().await;
+    Ok(())
+}
+
+pub fn run_claude_statusline() -> Result<()> {
+    machine::units::quota_probe::run_claude_statusline()
+}

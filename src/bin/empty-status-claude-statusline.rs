@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    empty_status::run_bar().await
+fn main() -> Result<()> {
+    empty_status::run_claude_statusline()
 }

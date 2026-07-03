@@ -87,8 +87,8 @@ type = "Quota"
 # Poll cadence (seconds). Values below 15s are clamped to 15s.
 poll_interval = 300.0
 # Codex quota comes from Codex app-server `account/rateLimits/read`.
-# Claude quota comes from the cache written by the `empty-status`
-# `--empty-status-claude-statusline` command configured as Claude Code's statusLine.
+# Claude quota comes from the cache written by `empty-status-claude-statusline`,
+# configured as Claude Code's statusLine command.
 label = "quota"
 # Enabled quota providers, in render order: "claude" | "codex".
 providers = ["claude", "codex"]
