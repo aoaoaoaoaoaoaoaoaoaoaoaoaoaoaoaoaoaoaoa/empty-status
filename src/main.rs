@@ -18,6 +18,7 @@ use tracing_appender::{
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::config::load_status_from_cfg;
+use std::ffi::OsStr;
 
 fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
     let bd = xdg::BaseDirectories::with_prefix("empty-status");
@@ -42,6 +43,13 @@ fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args_os()
+        .skip(1)
+        .any(|arg| arg == OsStr::new(machine::units::quota_probe::CLAUDE_STATUSLINE_ARG))
+    {
+        return machine::units::quota_probe::run_claude_statusline();
+    }
+
     if let Some(args) = machine::units::quota_probe::ProbeArgs::parse(std::env::args_os().skip(1))?
     {
         return machine::units::quota_probe::run(args).await;

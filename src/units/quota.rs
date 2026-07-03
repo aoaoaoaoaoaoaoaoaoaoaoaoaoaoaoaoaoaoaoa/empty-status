@@ -53,9 +53,9 @@ pub struct CodexQuota {
 pub struct ClaudeQuota {
     pub captured_at: String,
     pub weekly_used_percent: u8,
-    pub weekly_resets_at: String,
+    pub weekly_resets_at: i64,
     pub five_hour_used_percent: u8,
-    pub five_hour_resets_at: String,
+    pub five_hour_resets_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -217,12 +217,6 @@ enum SourceState {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ResetAt<'a> {
-    Exact(i64),
-    Label(&'a str),
-}
-
-#[derive(Debug, Clone, Copy)]
 enum QuotaWindow {
     ClaudeWeekly,
     ClaudeFiveHour,
@@ -255,20 +249,17 @@ impl QuotaWindow {
         }
     }
 
-    fn rollover(self, snapshot: &ProbeSnapshot) -> Option<ResetAt<'_>> {
+    fn rollover(self, snapshot: &ProbeSnapshot) -> Option<i64> {
         match self {
-            Self::ClaudeWeekly => snapshot
-                .claude
-                .as_ref()
-                .map(|quota| ResetAt::Label(quota.weekly_resets_at.as_str())),
+            Self::ClaudeWeekly => snapshot.claude.as_ref().map(|quota| quota.weekly_resets_at),
             Self::ClaudeFiveHour => snapshot
                 .claude
                 .as_ref()
-                .map(|quota| ResetAt::Label(quota.five_hour_resets_at.as_str())),
+                .map(|quota| quota.five_hour_resets_at),
             Self::CodexWeekly => snapshot
                 .codex
                 .as_ref()
-                .and_then(|quota| quota.weekly_resets_at.map(ResetAt::Exact)),
+                .and_then(|quota| quota.weekly_resets_at),
         }
     }
 }
@@ -420,12 +411,9 @@ fn render_window(label: &str, remaining: Option<u8>) -> Markup {
     Markup::bracketed(Markup::text(label).fg(GREY) + Markup::text(" ") + value)
 }
 
-fn render_rollover(label: &str, reset_at: Option<ResetAt<'_>>) -> Markup {
+fn render_rollover(label: &str, reset_at: Option<i64>) -> Markup {
     let value = reset_at
-        .and_then(|reset_at| match reset_at {
-            ResetAt::Exact(timestamp) => format_rollover_timestamp(timestamp),
-            ResetAt::Label(label) => Some(label.to_string()),
-        })
+        .and_then(format_rollover_timestamp)
         .map_or_else(|| Markup::text("--").fg(VIOLET), Markup::text);
     Markup::bracketed(Markup::text(format!("{label}@")).fg(GREY) + value)
 }
@@ -452,7 +440,7 @@ mod tests {
         let captured_at = Utc::now().to_rfc3339();
         let weekly_resets_at = Utc::now().timestamp() + 86400;
         let line = format!(
-            r#"{{"sampled_at":"{captured_at}","codex":{{"captured_at":"{captured_at}","weekly_used_percent":36,"weekly_resets_at":{weekly_resets_at},"five_hour_used_percent":5,"five_hour_resets_at":null,"plan_type":"pro"}},"claude":{{"captured_at":"{captured_at}","weekly_used_percent":18,"weekly_resets_at":"Fri 11am (America/New_York)","five_hour_used_percent":9,"five_hour_resets_at":"Fri 9pm (America/New_York)"}}}}"#
+            r#"{{"sampled_at":"{captured_at}","codex":{{"captured_at":"{captured_at}","weekly_used_percent":36,"weekly_resets_at":{weekly_resets_at},"five_hour_used_percent":5,"five_hour_resets_at":null,"plan_type":"pro"}},"claude":{{"captured_at":"{captured_at}","weekly_used_percent":18,"weekly_resets_at":{weekly_resets_at},"five_hour_used_percent":9,"five_hour_resets_at":{weekly_resets_at}}}}}"#
         );
 
         let mut quota = Quota::from_cfg(QuotaConfig {
@@ -475,8 +463,11 @@ mod tests {
     fn render_expanded_rollovers() {
         let captured_at = Utc::now().to_rfc3339();
         let weekly_resets_at = Utc::now().timestamp() + 86400;
+        let rollover_label = super::format_rollover_timestamp(weekly_resets_at);
+        assert!(rollover_label.is_some());
+        let rollover_label = rollover_label.unwrap_or_default();
         let line = format!(
-            r#"{{"sampled_at":"{captured_at}","codex":{{"captured_at":"{captured_at}","weekly_used_percent":36,"weekly_resets_at":{weekly_resets_at},"five_hour_used_percent":5,"five_hour_resets_at":null,"plan_type":"pro"}},"claude":{{"captured_at":"{captured_at}","weekly_used_percent":18,"weekly_resets_at":"Fri 11am (America/New_York)","five_hour_used_percent":9,"five_hour_resets_at":"Fri 9pm (America/New_York)"}}}}"#
+            r#"{{"sampled_at":"{captured_at}","codex":{{"captured_at":"{captured_at}","weekly_used_percent":36,"weekly_resets_at":{weekly_resets_at},"five_hour_used_percent":5,"five_hour_resets_at":null,"plan_type":"pro"}},"claude":{{"captured_at":"{captured_at}","weekly_used_percent":18,"weekly_resets_at":{weekly_resets_at},"five_hour_used_percent":9,"five_hour_resets_at":{weekly_resets_at}}}}}"#
         );
 
         let mut quota = Quota::from_cfg(QuotaConfig {
@@ -506,8 +497,7 @@ mod tests {
         assert!(body.contains("cc7@"));
         assert!(body.contains("cc5@"));
         assert!(body.contains("cx7@"));
-        assert!(body.contains("11am"));
-        assert!(body.contains("9pm"));
+        assert!(body.contains(&rollover_label));
     }
 
     #[test]

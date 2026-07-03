@@ -83,14 +83,26 @@ Config lives at `$XDG_CONFIG_HOME/empty-status/config.toml`.
 
 Schema:
 
-- Global keys are top-level (`min_polling_interval`, `padding`).
+- Global keys live under `[global]` (`min_polling_interval`, `padding`).
 - Units are `[[units]]` tables.
 - Each unit must specify:
   - `type = "..."`
-  - `poll_interval = <seconds>`
+  - optional `poll_interval = <seconds>`
   - plus any unit-specific keys.
 
 Unknown keys are rejected.
+
+Claude Code quota telemetry comes from Claude Code's `statusLine` JSON. Configure
+Claude Code to let `empty-status` write the shared quota cache:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/home/main/.local/bin/empty-status --empty-status-claude-statusline"
+  }
+}
+```
 
 Fast checks:
 

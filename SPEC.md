@@ -71,11 +71,14 @@ The `Quota` unit uses `ProcExec` to invoke the current binary as a hidden Rust
 self-probe. Its config owns a non-empty ordered provider set. The `codex`
 provider reads quota through `codex app-server --listen stdio://` and
 `account/rateLimits/read`; the `claude` provider reads Claude Code quota through
-a throttled hidden `/status` TTY probe plus cache. Disabled providers are not
-probed, rendered, or included in health. The probe emits a typed JSON snapshot,
-and the unit renders remaining weekly and five-hour capacity for the selected
-providers. Clicking the unit toggles an expanded view that reveals rollover
-times and source freshness.
+the cache written by the `--empty-status-claude-statusline` command. That
+command is intended to be configured as Claude Code's `statusLine` command; it
+consumes Claude's statusline JSON on stdin, records the five-hour and seven-day
+rate-limit windows, and prints a compact Claude status summary. Disabled
+providers are not probed, rendered, or included in health. The probe emits a
+typed JSON snapshot, and the unit renders remaining weekly and five-hour
+capacity for the selected providers. Clicking the unit toggles an expanded view
+that reveals rollover times and source freshness.
 
 ### Rendering
 
