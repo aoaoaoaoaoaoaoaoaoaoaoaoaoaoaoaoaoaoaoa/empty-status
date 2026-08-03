@@ -16,7 +16,8 @@ Semver policy:
 Local workflow helpers:
 
 - `python3 scripts/check.py`
-- `python3 scripts/install.py` (wraps `cargo install --release --path . --root ~/.local`; installs into `~/.local/bin`)
+- `python3 scripts/install.py` (wraps `cargo install --locked --force --path . --root ~/.local`; installs into `~/.local/bin`)
+- Every completed feature must end with `python3 scripts/install.py` so the locally installed binaries match the finished working tree.
 
 Docs policy:
 

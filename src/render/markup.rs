@@ -1,122 +1,130 @@
+use std::fmt;
+
+use super::color::Rgb8;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Markup(Vec<Run>);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Markup {
-    spans: Vec<Span>,
+struct Run {
+    text: String,
+    fg: Option<Rgb8>,
 }
 
 impl Markup {
-    #[must_use]
-    pub fn empty() -> Self {
-        Self { spans: vec![] }
+    pub const fn empty() -> Self {
+        Self(Vec::new())
     }
 
-    #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            spans: vec![Span::Text(text.into())],
+        Self(vec![Run {
+            text: text.into(),
+            fg: None,
+        }])
+    }
+
+    pub fn fg(mut self, color: Rgb8) -> Self {
+        for run in &mut self.0 {
+            if run.fg.is_none() {
+                run.fg = Some(color);
+            }
         }
-    }
-
-    #[must_use]
-    pub fn styled(style: Style, inner: Self) -> Self {
-        Self {
-            spans: vec![Span::Styled(style, inner)],
-        }
-    }
-
-    #[must_use]
-    pub fn fg(self, fg: impl Into<crate::render::color::Srgb8>) -> Self {
-        Self::styled(Style::default().fg(fg), self)
-    }
-
-    // Intentionally omitted for now: we have no background use-sites yet.
-
-    #[must_use]
-    pub fn append(mut self, other: Self) -> Self {
-        self.spans.extend(other.spans);
         self
     }
 
-    #[must_use]
-    pub fn delimited(left: impl Into<Markup>, inner: Markup, right: impl Into<Markup>) -> Markup {
+    pub fn append(mut self, mut other: Self) -> Self {
+        self.0.append(&mut other.0);
+        self
+    }
+
+    pub fn delimited(left: impl Into<Self>, inner: Self, right: impl Into<Self>) -> Self {
         left.into().append(inner).append(right.into())
     }
 
-    #[must_use]
-    pub fn bracketed(inner: Markup) -> Markup {
+    pub fn bracketed(inner: Self) -> Self {
         Self::delimited("[", inner, "]")
     }
 
-    #[must_use]
-    pub fn join(sep: impl Into<Markup>, parts: impl IntoIterator<Item = Markup>) -> Markup {
-        let sep = sep.into();
-        let mut it = parts.into_iter();
-        let Some(mut out) = it.next() else {
-            return Markup::empty();
+    pub fn join(separator: impl Into<Self>, parts: impl IntoIterator<Item = Self>) -> Self {
+        let separator = separator.into();
+        let mut parts = parts.into_iter();
+        let Some(mut joined) = parts.next() else {
+            return Self::empty();
         };
-        for part in it {
-            out = out.append(sep.clone()).append(part);
+        for part in parts {
+            joined = joined.append(separator.clone()).append(part);
         }
-        out
+        joined
     }
 
-    #[must_use]
-    pub fn spans(&self) -> &[Span] {
-        &self.spans
-    }
-}
-
-impl Default for Markup {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Span {
-    Text(String),
-    Styled(Style, Markup),
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub struct Style {
-    pub fg: Option<crate::render::color::Srgb8>,
-    pub bg: Option<crate::render::color::Srgb8>,
-}
-
-impl Style {
-    #[must_use]
-    pub fn fg(self, fg: impl Into<crate::render::color::Srgb8>) -> Self {
-        Self {
-            fg: Some(fg.into()),
-            ..self
+    fn write_pango(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for run in &self.0 {
+            if let Some(color) = run.fg {
+                write!(f, "<span color='{color}'>")?;
+            }
+            escape_pango(f, &run.text)?;
+            if run.fg.is_some() {
+                f.write_str("</span>")?;
+            }
         }
+        Ok(())
     }
+}
 
-    // Intentionally omitted for now: we have no background use-sites yet.
+fn escape_pango(f: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
+    for ch in text.chars() {
+        f.write_str(match ch {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '\'' => "&apos;",
+            '"' => "&quot;",
+            _ => {
+                write!(f, "{ch}")?;
+                continue;
+            }
+        })?;
+    }
+    Ok(())
 }
 
 impl From<&str> for Markup {
     fn from(value: &str) -> Self {
-        Markup::text(value)
+        Self::text(value)
     }
 }
 
 impl From<String> for Markup {
     fn from(value: String) -> Self {
-        Markup::text(value)
+        Self::text(value)
     }
 }
 
 impl std::ops::Add for Markup {
-    type Output = Markup;
+    type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
         self.append(rhs)
     }
 }
 
-impl std::fmt::Display for Markup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&crate::render::pango::to_pango(self))
+impl fmt::Display for Markup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write_pango(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Markup;
+    use crate::render::color::{GREEN, RED};
+
+    #[test]
+    fn escapes_and_preserves_inner_color() {
+        let markup = (Markup::text("<&") + Markup::text("inner").fg(RED)).fg(GREEN);
+        assert_eq!(
+            markup.to_string(),
+            "<span color='#B5BD68'>&lt;&amp;</span><span color='#CC6666'>inner</span>"
+        );
     }
 }

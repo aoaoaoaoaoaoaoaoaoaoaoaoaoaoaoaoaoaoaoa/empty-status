@@ -1,58 +1,45 @@
 #![cfg(target_os = "linux")]
+
+use std::fs::OpenOptions;
+
 mod config;
-#[cfg(test)]
-mod config_tests;
 mod core;
 mod display;
-mod machine;
+mod probe_io;
+mod reactor;
 mod render;
 mod units;
 mod util;
 
 use anyhow::Result;
 use tracing::{info, level_filters::LevelFilter};
-use tracing_appender::{
-    non_blocking,
-    rolling::{RollingFileAppender, Rotation},
-};
+use tracing_appender::non_blocking;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::config::load_status_from_cfg;
-
 fn init_file_logger() -> Option<non_blocking::WorkerGuard> {
-    let bd = xdg::BaseDirectories::with_prefix("empty-status");
-    let log_dir = bd.get_state_home()?;
-    let file_appender: RollingFileAppender = RollingFileAppender::builder()
-        .rotation(Rotation::NEVER)
-        .filename_prefix("last.log")
-        .build(log_dir)
+    let path = xdg::BaseDirectories::with_prefix("empty-status")
+        .place_state_file("last.log")
         .ok()?;
-    let (non_blocking_appender, guard) = non_blocking(file_appender);
-
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .ok()?;
+    let (writer, guard) = non_blocking(file);
     let filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
-    fmt()
-        .with_env_filter(filter)
-        .with_writer(non_blocking_appender)
-        .init();
-
+    fmt().with_env_filter(filter).with_writer(writer).init();
     Some(guard)
 }
 
 pub async fn run_bar() -> Result<()> {
-    if let Some(args) = machine::units::quota_probe::ProbeArgs::parse(std::env::args_os().skip(1))?
-    {
-        return machine::units::quota_probe::run(args).await;
-    }
-
     let _guard = init_file_logger();
-    info!("Starting empty-status!");
-    let status = load_status_from_cfg()?;
-    status.run().await;
-    Ok(())
+    info!("starting empty-status");
+    config::load()?.run().await
 }
 
 pub fn run_claude_statusline() -> Result<()> {
-    machine::units::quota_probe::run_claude_statusline()
+    units::quota::run_claude_statusline()
 }

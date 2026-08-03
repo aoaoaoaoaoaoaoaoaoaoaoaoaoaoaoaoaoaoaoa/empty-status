@@ -1,119 +1,44 @@
-use std::{
-    marker::PhantomData,
-    ops::{Add, Mul},
-    time::Instant,
-};
-
-#[macro_export]
-macro_rules! mode_enum {
-    ( $($member:ident),* $(,)? ) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, empty_status_macros::RotateNext)]
-        pub enum DisplayMode {
-            $($member),*
-        }
-    };
-}
-
-pub trait Smoother<T>
-where
-    T: Add<T, Output = T> + Mul<f64, Output = T>,
-{
-    fn feed(&mut self, value: T, time: Instant);
-    fn read(&self) -> Option<&T>;
-
-    fn feed_and_read(&mut self, value: T, time: Instant) -> Option<&T> {
-        self.feed(value, time);
-        self.read()
-    }
-}
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
-struct EmaRecord<T>
-where
-    T: Add<T, Output = T> + Mul<f64, Output = T>,
-{
-    v: T,
-    t: Instant,
+pub struct Ema {
+    tau: Duration,
+    value: Option<(f64, Instant)>,
 }
 
-#[derive(Debug)]
-pub struct Ema<T>
-where
-    T: Add<T, Output = T> + Mul<f64, Output = T>,
-{
-    lambda_sec: f64,
-    value: Option<EmaRecord<T>>,
-    _marker: PhantomData<T>,
-}
-
-impl<T> Ema<T>
-where
-    T: Add<T, Output = T> + Mul<f64, Output = T>,
-{
-    pub fn new(lambda_sec: f64) -> Self {
-        Ema {
-            lambda_sec,
-            value: None,
-            _marker: PhantomData,
-        }
+impl Ema {
+    pub const fn new(tau: Duration) -> Self {
+        Self { tau, value: None }
     }
-}
 
-impl<T: Into<f64>> Smoother<T> for Ema<T>
-where
-    T: Add<T, Output = T> + Mul<f64, Output = T>,
-{
-    fn feed(&mut self, value: T, time: Instant) {
-        match self.value.take() {
-            None => {
-                self.value = Some(EmaRecord { v: value, t: time });
-            }
-            Some(EmaRecord { v, t }) => {
-                let dt = time.duration_since(t);
-                let f = (-dt.as_secs_f64() / self.lambda_sec).exp();
-                let new_v = v * f + value * (1.0 - f);
-                self.value = Some(EmaRecord { v: new_v, t: time });
-            }
-        }
+    pub fn reset(&mut self) {
+        self.value = None;
     }
-    fn read(&self) -> Option<&T> {
-        self.value.as_ref().map(|r| &r.v)
+
+    pub fn push(&mut self, sample: f64, at: Instant) -> f64 {
+        let value = self.value.map_or(sample, |(previous, previous_at)| {
+            let weight = (-at.saturating_duration_since(previous_at).as_secs_f64()
+                / self.tau.as_secs_f64())
+            .exp();
+            previous * weight + sample * (1.0 - weight)
+        });
+        self.value = Some((value, at));
+        value
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use core::f64;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    use super::Ema;
 
     #[test]
-    fn ema_basic() {
-        // λ = 1 s
-        let mut s = Ema::new(1.0);
-        let t0 = Instant::now();
-
-        // Step 0: initialise with 0
-        s.feed(0.0, t0);
-        let v0 = s.read().copied().unwrap_or(f64::NAN);
-        assert!((v0 - 0.0).abs() < 1e-12);
-
-        // Step 1: after 1 s feed 10
-        s.feed(10.0, t0 + Duration::from_secs(1));
-        let v1 = s.read().copied().unwrap_or(f64::NAN);
-        let expected_v1 = 10.0 * (1.0 - f64::consts::E.powf(-1.0));
-        assert!((v1 - expected_v1).abs() < 1e-9);
-
-        // Step 2: after another 1 s feed another 10
-        s.feed(10.0, t0 + Duration::from_secs(2));
-        let v2 = s.read().copied().unwrap_or(f64::NAN);
-        let expected_v2 = v1 * f64::consts::E.powf(-1.0) + 10.0 * (1.0 - f64::consts::E.powf(-1.0));
-        assert!((v2 - expected_v2).abs() < 1e-9);
-    }
-
-    #[test]
-    fn ema_empty() {
-        let s: Ema<f64> = Ema::new(1.0);
-        assert!(s.read().is_none());
+    fn smooths_a_step() {
+        let mut ema = Ema::new(Duration::from_secs(1));
+        let start = Instant::now();
+        assert_eq!(ema.push(0.0, start), 0.0);
+        let value = ema.push(10.0, start + Duration::from_secs(1));
+        assert!((value - 10.0 * (1.0 - (-1.0_f64).exp())).abs() < 1e-9);
     }
 }

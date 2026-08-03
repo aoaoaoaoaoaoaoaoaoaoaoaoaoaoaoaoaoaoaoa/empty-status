@@ -1,95 +1,159 @@
-use std::path::Path;
+use std::time::Duration;
 
-use crate::display::{color_by_pct, color_by_pct_custom};
-use crate::mode_enum;
-use crate::render::markup::Markup;
 use serde::Deserialize;
 use sysinfo::{ProcessesToUpdate, System};
 
-mode_enum!(Totals, WorstProcess);
+use crate::{
+    core::{Button, View},
+    display::{color_by_percent, color_by_thresholds},
+    probe_io::ProbeIo,
+    render::markup::Markup,
+    units::{ProbeError, Reaction, error_view},
+};
 
-#[derive(Debug, Deserialize, Clone, Copy)]
-pub struct MemConfig {}
+pub const TIMEOUT: Duration = Duration::from_secs(5);
+
+cycle!(
+    enum Mode {
+        Totals,
+        WorstProcess,
+    }
+);
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {}
 
 #[derive(Debug)]
-pub struct Mem {
-    mode: DisplayMode,
+pub struct Model {
+    mode: Mode,
 }
 
-impl Mem {
-    pub fn new() -> Self {
-        Self {
-            mode: DisplayMode::Totals,
+#[derive(Debug, Clone, Copy)]
+pub enum Request {
+    Totals,
+    WorstProcess,
+}
+
+#[derive(Debug)]
+pub enum Sample {
+    Totals {
+        used_bytes: u64,
+        total_bytes: u64,
+    },
+    WorstProcess {
+        name: String,
+        rss_bytes: u64,
+        total_bytes: u64,
+    },
+}
+
+pub type Reply = Result<Sample, ProbeError>;
+
+impl Model {
+    pub const fn new(_config: Config) -> Self {
+        Self { mode: Mode::Totals }
+    }
+
+    pub const fn request(&self) -> Request {
+        match self.mode {
+            Mode::Totals => Request::Totals,
+            Mode::WorstProcess => Request::WorstProcess,
         }
     }
-    fn read_formatted_totals() -> Markup {
-        let mut sys = System::new();
-        sys.refresh_memory();
 
-        let total_bytes = sys.total_memory();
-        let used_bytes = sys.used_memory();
-
-        let used_frac = used_bytes as f64 / total_bytes as f64;
-
-        let used_gib = used_bytes as f64 / (1 << 30) as f64;
-        let used_percent = used_frac * 100.0;
-
-        let col = crate::render::color::Srgb8::from(color_by_pct(used_percent));
-        Markup::text("mem ")
-            + Markup::bracketed(
-                Markup::text("used ")
-                    + Markup::text(format!("{used_gib:>4.1}")).fg(col)
-                    + Markup::text(" GiB (")
-                    + Markup::text(format!("{used_percent:>2.0}")).fg(col)
-                    + Markup::text("%)"),
-            )
+    pub fn apply(reply: Reply) -> View {
+        match reply {
+            Ok(Sample::Totals {
+                used_bytes,
+                total_bytes,
+            }) => {
+                let used_percent = percent(used_bytes, total_bytes);
+                let color = color_by_percent(used_percent);
+                let used_gib = used_bytes as f64 / (1_u64 << 30) as f64;
+                View::ok(
+                    Markup::text("mem ")
+                        + Markup::bracketed(
+                            Markup::text("used ")
+                                + Markup::text(format!("{used_gib:>4.1}")).fg(color)
+                                + Markup::text(" GiB (")
+                                + Markup::text(format!("{used_percent:>2.0}")).fg(color)
+                                + Markup::text("%)"),
+                        ),
+                )
+            }
+            Ok(Sample::WorstProcess {
+                name,
+                rss_bytes,
+                total_bytes,
+            }) => {
+                let rss_gib = rss_bytes as f64 / (1_u64 << 30) as f64;
+                let color =
+                    color_by_thresholds(percent(rss_bytes, total_bytes), [5.0, 10.0, 20.0, 50.0]);
+                View::ok(
+                    Markup::text("mem ")
+                        + Markup::bracketed(
+                            Markup::text("worst ")
+                                + Markup::text(name)
+                                + Markup::text(": ")
+                                + Markup::text(format!("{rss_gib:>2.3}")).fg(color)
+                                + Markup::text(" GiB rss"),
+                        ),
+                )
+            }
+            Err(error) => error_view("mem", error),
+        }
     }
 
-    fn read_formatted_worst_rss() -> Markup {
-        let mut sys = System::new();
-        let _ = sys.refresh_processes(ProcessesToUpdate::All, true);
-        sys.refresh_memory();
-        let mut max_name = "";
-        let mut max_rss_bytes = 0;
+    pub fn click(&mut self, _button: Button) -> Reaction {
+        self.mode.advance();
+        Reaction::refresh()
+    }
+}
 
-        for process in sys.processes().values() {
-            if let Some(name) = process
-                .exe()
-                .and_then(Path::file_name)
-                .and_then(|s| s.to_str())
-            {
-                let rss = process.memory();
-                if rss > max_rss_bytes {
-                    max_name = name;
-                    max_rss_bytes = rss;
-                }
+pub async fn probe(request: Request, io: &ProbeIo) -> Reply {
+    io.blocking(move || match request {
+        Request::Totals => {
+            let mut system = System::new();
+            system.refresh_memory();
+            Sample::Totals {
+                used_bytes: system.used_memory(),
+                total_bytes: system.total_memory(),
             }
         }
-
-        let max_rss_gib = max_rss_bytes as f64 / (1 << 30) as f64;
-        let max_rss_rel = max_rss_bytes as f64 / sys.total_memory() as f64 * 100.0;
-        let col = crate::render::color::Srgb8::from(color_by_pct_custom(
-            max_rss_rel,
-            &[5.0, 10.0, 20.0, 50.0],
-        ));
-        Markup::text("mem ")
-            + Markup::bracketed(
-                Markup::text("worst ")
-                    + Markup::text(max_name)
-                    + Markup::text(": ")
-                    + Markup::text(format!("{max_rss_gib:>2.3}")).fg(col)
-                    + Markup::text(" GiB rss"),
-            )
-    }
-
-    pub fn read_markup(&self) -> Markup {
-        match self.mode {
-            DisplayMode::Totals => Self::read_formatted_totals(),
-            DisplayMode::WorstProcess => Self::read_formatted_worst_rss(),
+        Request::WorstProcess => {
+            let mut system = System::new();
+            let _ = system.refresh_processes(ProcessesToUpdate::All, true);
+            system.refresh_memory();
+            let (name, rss_bytes) = system
+                .processes()
+                .values()
+                .map(|process| {
+                    let name = process
+                        .exe()
+                        .and_then(|path| path.file_name())
+                        .unwrap_or_else(|| process.name())
+                        .to_string_lossy()
+                        .into_owned();
+                    (name, process.memory())
+                })
+                .max_by_key(|(_, rss)| *rss)
+                .unwrap_or_else(|| ("?".to_owned(), 0));
+            Sample::WorstProcess {
+                name,
+                rss_bytes,
+                total_bytes: system.total_memory(),
+            }
         }
-    }
+    })
+    .await
+    .map_err(Into::into)
+}
 
-    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
-        self.mode = DisplayMode::next(self.mode);
+fn percent(part: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        part as f64 / total as f64 * 100.0
     }
 }

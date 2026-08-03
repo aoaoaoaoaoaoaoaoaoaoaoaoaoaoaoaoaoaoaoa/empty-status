@@ -23,6 +23,8 @@ def main() -> None:
             *[f"{k}={v}" for k, v in env.items()],
             "cargo",
             "install",
+            "--locked",
+            "--force",
             "--path",
             ".",
             "--root",

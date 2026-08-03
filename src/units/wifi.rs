@@ -1,86 +1,158 @@
-use crate::{
-    core::{BROWN, GREEN, RED, VIOLET},
-    display::color_by_pct_rev,
-    mode_enum,
-    render::markup::Markup,
-};
+use std::{str, time::Duration};
+
 use neli_wifi::Socket;
 use serde::Deserialize;
 
-mode_enum!(ShowSsid, HideSsid);
+use crate::{
+    core::{Button, Health, View},
+    display::color_by_percent_remaining,
+    probe_io::ProbeIo,
+    render::{
+        color::{BROWN, GREEN, RED, VIOLET},
+        markup::Markup,
+    },
+    units::{ProbeError, Reaction, error_view},
+};
+
+pub const TIMEOUT: Duration = Duration::from_secs(3);
+
+cycle!(
+    enum Mode {
+        ShowSsid,
+        HideSsid,
+    }
+);
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct WifiConfig {
+#[serde(deny_unknown_fields)]
+pub struct Config {
     interface: String,
 }
 
 #[derive(Debug)]
-pub struct Wifi {
-    cfg: WifiConfig,
-    mode: DisplayMode,
+pub struct Model {
+    interface: String,
+    mode: Mode,
 }
 
-impl Wifi {
-    pub fn from_cfg(cfg: WifiConfig) -> Self {
-        Self {
-            cfg,
-            mode: DisplayMode::ShowSsid,
+#[derive(Debug)]
+pub struct Request {
+    interface: String,
+}
+
+#[derive(Debug)]
+pub enum Sample {
+    NoNetlink,
+    Gone,
+    Down,
+    Connected { ssid: String, signal: u8 },
+}
+
+pub type Reply = Result<Sample, ProbeError>;
+
+impl Model {
+    pub fn new(config: Config) -> Result<Self, String> {
+        if config.interface.is_empty() {
+            return Err("interface must not be empty".to_owned());
+        }
+        Ok(Self {
+            interface: config.interface,
+            mode: Mode::ShowSsid,
+        })
+    }
+
+    pub fn request(&self) -> Request {
+        Request {
+            interface: self.interface.clone(),
         }
     }
+
+    pub fn apply(&mut self, reply: Reply) -> View {
+        match reply {
+            Ok(Sample::NoNetlink) => View::new(
+                Markup::text("wifi ") + Markup::text("no netlink").fg(VIOLET),
+                Health::Degraded,
+            ),
+            Ok(Sample::Gone) => View::new(
+                Markup::text(format!("wifi {} ", self.interface)) + Markup::text("gone").fg(BROWN),
+                Health::Error,
+            ),
+            Ok(Sample::Down) => View::new(
+                Markup::text("wifi ") + Markup::text("down").fg(RED),
+                Health::Error,
+            ),
+            Ok(Sample::Connected { ssid, signal }) => {
+                let ssid = match self.mode {
+                    Mode::ShowSsid => {
+                        Markup::text(" ")
+                            + Markup::bracketed(Markup::text(ssid).fg(GREEN))
+                            + Markup::text(" ")
+                    }
+                    Mode::HideSsid => Markup::text(" "),
+                };
+                View::ok(
+                    Markup::text("wifi")
+                        + ssid
+                        + Markup::text(format!("{signal:2}%"))
+                            .fg(color_by_percent_remaining(f64::from(signal))),
+                )
+            }
+            Err(error) => error_view("wifi", error),
+        }
+    }
+
+    pub fn click(&mut self, _button: Button) -> Reaction {
+        self.mode.advance();
+        Reaction::refresh()
+    }
 }
 
-impl Wifi {
-    pub fn read_markup(&self) -> Markup {
-        let Ok(mut sock) = Socket::connect() else {
-            return Markup::text("wifi ") + Markup::text("no netlink").fg(VIOLET);
-        };
+pub async fn probe(request: Request, io: &ProbeIo) -> Reply {
+    io.blocking(move || read_wifi(&request.interface))
+        .await
+        .map_err(Into::into)
+}
 
-        let Some(interface) = sock.get_interfaces_info().ok().and_then(|v| {
-            v.into_iter().find(|i| {
-                i.name
-                    .as_deref()
-                    // SAFETY: the last byte is always a null terminator, so never empty
-                    .and_then(|b| str::from_utf8(&b[..b.len() - 1]).ok())
-                    == Some(self.cfg.interface.as_str())
-            })
-        }) else {
-            return Markup::text(format!("wifi {} ", self.cfg.interface))
-                + Markup::text("gone").fg(BROWN);
-        };
+fn read_wifi(interface_name: &str) -> Sample {
+    let Ok(mut socket) = Socket::connect() else {
+        return Sample::NoNetlink;
+    };
+    let Some(interface) = socket.get_interfaces_info().ok().and_then(|interfaces| {
+        interfaces.into_iter().find(|interface| {
+            interface
+                .name
+                .as_deref()
+                .and_then(decode_nul_string)
+                .as_deref()
+                == Some(interface_name)
+        })
+    }) else {
+        return Sample::Gone;
+    };
+    let Some(index) = interface.index else {
+        return Sample::Down;
+    };
+    let Some(station) = socket
+        .get_station_info(index)
+        .ok()
+        .and_then(|mut stations| stations.pop())
+    else {
+        return Sample::Down;
+    };
 
-        let Some(station) = sock
-            .get_station_info(interface.index.unwrap_or_default())
-            .ok()
-            .and_then(|mut v| v.pop())
-        else {
-            return Markup::text("wifi ") + Markup::text("down").fg(RED);
-        };
+    let signal_dbm = f32::from(station.signal.unwrap_or(-127));
+    let signal = ((signal_dbm + 80.0) / 50.0 * 100.0)
+        .clamp(0.0, 100.0)
+        .round() as u8;
+    let ssid = interface
+        .ssid
+        .as_deref()
+        .and_then(decode_nul_string)
+        .unwrap_or_else(|| "?".to_owned());
+    Sample::Connected { ssid, signal }
+}
 
-        // linear remap −80 dBm→0 %, −30 dBm→100 %
-        let pct = (((f32::from(station.signal.unwrap_or(-127)) + 80.0) / 50.0).clamp(0.0, 1.0)
-            * 100.0)
-            .round()
-            .clamp(0.0, 100.0) as u8;
-        let pct_str = Markup::text(format!("{pct:2.0}%")).fg(color_by_pct_rev(f64::from(pct)));
-
-        let ssid = interface
-            .ssid
-            .as_deref()
-            .and_then(|b| str::from_utf8(b).ok())
-            .unwrap_or("?");
-        let ssid_str = match self.mode {
-            DisplayMode::ShowSsid => {
-                Markup::text(" ")
-                    + Markup::bracketed(Markup::text(ssid).fg(GREEN))
-                    + Markup::text(" ")
-            }
-            DisplayMode::HideSsid => Markup::text(" "),
-        };
-
-        Markup::text("wifi") + ssid_str + pct_str
-    }
-
-    pub fn handle_click(&mut self, _click: crate::core::ClickEvent) {
-        self.mode = DisplayMode::next(self.mode);
-    }
+fn decode_nul_string(bytes: &[u8]) -> Option<String> {
+    let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+    str::from_utf8(bytes).ok().map(str::to_owned)
 }

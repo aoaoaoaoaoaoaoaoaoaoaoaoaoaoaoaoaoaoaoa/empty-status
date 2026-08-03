@@ -1,15 +1,28 @@
-use crate::core::{BLUE, BROWN, ORANGE, VIOLET};
-use crate::render::markup::Markup;
-use crate::util::{Ema, Smoother};
-use cute::c;
+use std::{
+    str,
+    time::{Duration, Instant},
+};
+
 use serde::{Deserialize, Deserializer};
 use serde_inline_default::serde_inline_default;
-use std::time::Instant;
-use tracing::info;
-const BARS: &[&str; 9] = &[" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+use crate::{
+    core::{Button, View},
+    probe_io::ProbeIo,
+    render::{
+        color::{BLUE, ORANGE},
+        markup::Markup,
+    },
+    units::{ProbeError, Reaction, error_view, positive_duration},
+    util::Ema,
+};
+
+pub const TIMEOUT: Duration = Duration::from_secs(3);
+const BLOCK_ROOT: &str = "/sys/class/block";
+const BARS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 #[derive(Debug, Clone)]
-enum DiskSelector {
+enum Selector {
     Name(String),
     PartLabel(String),
     PartUuid(String),
@@ -17,250 +30,249 @@ enum DiskSelector {
 
 #[serde_inline_default]
 #[derive(Debug, Deserialize)]
-struct RawDiskConfig {
+#[serde(deny_unknown_fields)]
+struct RawConfig {
     #[serde(default)]
     disk: Option<String>,
     #[serde(default)]
     partlabel: Option<String>,
     #[serde(default)]
     partuuid: Option<String>,
-
     #[serde_inline_default(0.5)]
     smoothing_sec: f64,
-
     #[serde_inline_default(3e8)]
     write_peak_ref: f64,
-
     #[serde_inline_default(1.5e9)]
     read_peak_ref: f64,
 }
 
 #[derive(Debug, Clone)]
-pub struct DiskConfig {
-    selector: DiskSelector,
+pub struct Config {
+    selector: Selector,
     smoothing_sec: f64,
     write_peak_ref: f64,
     read_peak_ref: f64,
 }
 
-impl<'de> Deserialize<'de> for DiskConfig {
+#[derive(Debug)]
+pub struct Model {
+    selector: Selector,
+    label: String,
+    read_peak: f64,
+    write_peak: f64,
+    previous: Option<Counters>,
+    read_rate: Ema,
+    write_rate: Ema,
+}
+
+#[derive(Debug)]
+pub struct Request {
+    selector: Selector,
+}
+
+#[derive(Debug)]
+pub struct Sample {
+    captured_at: Instant,
+    read_bytes: u64,
+    written_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Counters {
+    captured_at: Instant,
+    read_bytes: u64,
+    written_bytes: u64,
+}
+
+pub type Reply = Result<Sample, ProbeError>;
+
+impl<'de> Deserialize<'de> for Config {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let RawDiskConfig {
-            disk,
-            partlabel,
-            partuuid,
-            smoothing_sec,
-            write_peak_ref,
-            read_peak_ref,
-        } = RawDiskConfig::deserialize(deserializer)?;
-
-        let selector = match (disk, partlabel, partuuid) {
-            (Some(disk), None, None) => DiskSelector::Name(disk),
-            (None, Some(partlabel), None) => DiskSelector::PartLabel(partlabel),
-            (None, None, Some(partuuid)) => DiskSelector::PartUuid(partuuid),
+        let raw = RawConfig::deserialize(deserializer)?;
+        let selector = match (raw.disk, raw.partlabel, raw.partuuid) {
+            (Some(value), None, None) => Selector::Name(value),
+            (None, Some(value), None) => Selector::PartLabel(value),
+            (None, None, Some(value)) => Selector::PartUuid(value),
             (None, None, None) => {
                 return Err(serde::de::Error::custom(
-                    "Disk: missing selector: set exactly one of `disk`, `partlabel`, or `partuuid`",
+                    "set exactly one of disk, partlabel, or partuuid",
                 ));
             }
             _ => {
                 return Err(serde::de::Error::custom(
-                    "Disk: selectors are mutually exclusive: set exactly one of `disk`, `partlabel`, or `partuuid`",
+                    "disk selectors are mutually exclusive",
                 ));
             }
         };
-
         Ok(Self {
             selector,
-            smoothing_sec,
-            write_peak_ref,
-            read_peak_ref,
+            smoothing_sec: raw.smoothing_sec,
+            write_peak_ref: raw.write_peak_ref,
+            read_peak_ref: raw.read_peak_ref,
         })
     }
 }
 
-#[derive(Debug)]
-pub struct Disk {
-    cfg: DiskConfig,
-    sector_size: Option<u64>,
-    root: Option<String>,
-    name: Option<String>,
-    initialized: bool,
-    write_ema: Ema<f64>,
-    read_ema: Ema<f64>,
-    read_threshs: Vec<f64>,
-    write_threshs: Vec<f64>,
-    last_r: u64,
-    last_w: u64,
-    last_t: Instant,
-}
+impl Model {
+    pub fn new(config: Config) -> Result<Self, String> {
+        let label = selector_value(&config.selector);
+        if label.is_empty() || label.contains('/') {
+            return Err("disk selector must be one nonempty path component".to_owned());
+        }
+        let smoothing = positive_duration("smoothing_sec", config.smoothing_sec)?;
+        for (name, value) in [
+            ("write_peak_ref", config.write_peak_ref),
+            ("read_peak_ref", config.read_peak_ref),
+        ] {
+            if !value.is_finite() || value <= 1.0 {
+                return Err(format!("{name} must be finite and greater than one"));
+            }
+        }
+        Ok(Self {
+            selector: config.selector,
+            label,
+            read_peak: config.read_peak_ref,
+            write_peak: config.write_peak_ref,
+            previous: None,
+            read_rate: Ema::new(smoothing),
+            write_rate: Ema::new(smoothing),
+        })
+    }
 
-impl Disk {
-    pub fn from_cfg(cfg: DiskConfig) -> Self {
-        // TODO evetually we'll make these Results and handle construction with toml config
-        let sector_size = None;
-        let (last_r, last_w): (u64, u64) = (0, 0);
-        let name = match &cfg.selector {
-            DiskSelector::Name(disk) => Some(disk.clone()),
-            DiskSelector::PartLabel(_) | DiskSelector::PartUuid(_) => None,
+    pub fn request(&self) -> Request {
+        Request {
+            selector: self.selector.clone(),
+        }
+    }
+
+    pub fn apply(&mut self, reply: Reply) -> View {
+        let sample = match reply {
+            Ok(sample) => sample,
+            Err(error) => return error_view(&format!("disk {}", self.label), error),
         };
-
-        let read_threshs = c![cfg.read_peak_ref.powf(i as f64 /9.0), for i in 1..10];
-        info!("computed read thresholds: {:?}", read_threshs);
-        let write_threshs = c![cfg.write_peak_ref.powf(i as f64 / 9.0), for i in 1..10];
-        info!("computed write thresholds: {:?}", write_threshs);
-
-        Self {
-            sector_size,
-            root: None,
-            name,
-            initialized: false,
-            write_ema: Ema::new(cfg.smoothing_sec),
-            read_ema: Ema::new(cfg.smoothing_sec),
-            read_threshs,
-            write_threshs,
-            last_r,
-            last_w,
-            last_t: Instant::now(),
-            cfg,
-        }
-    }
-
-    fn parse_stat(buf: &str, sector_size: u64) -> Option<(u64, u64)> {
-        let spl: Vec<&str> = buf.split_whitespace().collect();
-        let r = spl.get(2).and_then(|s| s.parse::<u64>().ok())? * sector_size;
-        let w = spl.get(6).and_then(|s| s.parse::<u64>().ok())? * sector_size;
-        Some((r, w))
-    }
-
-    pub fn select_root(&mut self, entries: &[String]) {
-        if self.root.is_some() {
-            return;
-        }
-        let Some(disk_name) = self.name.as_ref() else {
-            return;
+        let current = Counters {
+            captured_at: sample.captured_at,
+            read_bytes: sample.read_bytes,
+            written_bytes: sample.written_bytes,
         };
-        self.root = entries
-            .iter()
-            .filter(|name| disk_name.starts_with(*name))
-            .max_by_key(|name| name.len())
-            .cloned();
+        let Some(previous) = self.previous.replace(current) else {
+            return View::loading(&format!("disk {}", self.label));
+        };
+        let elapsed = current
+            .captured_at
+            .saturating_duration_since(previous.captured_at)
+            .as_secs_f64();
+        let read = rate(current.read_bytes, previous.read_bytes, elapsed);
+        let written = rate(current.written_bytes, previous.written_bytes, elapsed);
+        let read = self.read_rate.push(read, current.captured_at);
+        let written = self.write_rate.push(written, current.captured_at);
+
+        View::ok(
+            Markup::text(format!("disk {} ", self.label))
+                + Markup::bracketed(
+                    Markup::text(bar(read, self.read_peak)).fg(BLUE)
+                        + Markup::text(bar(written, self.write_peak)).fg(ORANGE),
+                ),
+        )
     }
 
-    pub fn set_sector_size(&mut self, size: Option<u64>) {
-        if self.sector_size.is_none() {
-            self.sector_size = size;
-        }
-    }
-
-    pub fn disk_root(&self) -> Option<&str> {
-        self.root.as_deref()
-    }
-
-    pub fn disk_name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
-
-    pub fn set_disk_name(&mut self, name: String) {
-        if self.name.is_none() {
-            self.name = Some(name);
-        }
-    }
-
-    pub fn display_name(&self) -> &str {
-        match &self.cfg.selector {
-            DiskSelector::Name(disk) => disk,
-            DiskSelector::PartLabel(label) => label,
-            DiskSelector::PartUuid(uuid) => uuid,
-        }
-    }
-
-    pub fn selector_partlabel(&self) -> Option<&str> {
-        match &self.cfg.selector {
-            DiskSelector::PartLabel(label) => Some(label),
-            DiskSelector::Name(_) | DiskSelector::PartUuid(_) => None,
-        }
-    }
-
-    pub fn selector_partuuid(&self) -> Option<&str> {
-        match &self.cfg.selector {
-            DiskSelector::PartUuid(uuid) => Some(uuid),
-            DiskSelector::Name(_) | DiskSelector::PartLabel(_) => None,
-        }
+    pub const fn click(_button: Button) -> Reaction {
+        Reaction::inert()
     }
 }
 
-impl Disk {
-    pub fn read_markup_from_bytes(
-        &mut self,
-        stat_bytes: &[u8],
-        sector_size_bytes: Option<&[u8]>,
-    ) -> Markup {
-        if self.name.is_none() {
-            return Markup::text(format!("disk {} ", self.display_name()))
-                .append(Markup::text("resolving").fg(VIOLET));
+pub async fn probe(request: Request, io: &ProbeIo) -> Reply {
+    let name = resolve_name(&request.selector, io).await?;
+    let stat_path = format!("{BLOCK_ROOT}/{name}/stat");
+    let sector_size = async {
+        let direct = format!("{BLOCK_ROOT}/{name}/queue/logical_block_size");
+        match io.read(direct).await {
+            Ok(size) => Ok(size),
+            Err(_) => {
+                io.read(format!("{BLOCK_ROOT}/{name}/../queue/logical_block_size"))
+                    .await
+            }
         }
+    };
+    let (stat, sector_size) = tokio::join!(io.read(stat_path), sector_size);
+    let stat = stat?;
+    let sector_size = parse_u64(&sector_size?)?;
+    let (read_sectors, written_sectors) = parse_stat(&stat)?;
+    Ok(Sample {
+        captured_at: Instant::now(),
+        read_bytes: read_sectors
+            .checked_mul(sector_size)
+            .ok_or_else(|| ProbeError::Unit("disk read counter overflow".to_owned()))?,
+        written_bytes: written_sectors
+            .checked_mul(sector_size)
+            .ok_or_else(|| ProbeError::Unit("disk write counter overflow".to_owned()))?,
+    })
+}
 
-        if self.sector_size.is_none() {
-            let size = sector_size_bytes.and_then(|bytes| {
-                std::str::from_utf8(bytes)
-                    .ok()
-                    .and_then(|s| s.trim().parse::<u64>().ok())
-            });
-            self.set_sector_size(size.or(Some(512)));
-        }
-
-        let Some(sector_size) = self.sector_size else {
-            return Markup::text(format!("disk {} ", self.display_name()))
-                .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN)));
-        };
-
-        let buf = std::str::from_utf8(stat_bytes).unwrap_or_default();
-        let Some((r, w)) = Self::parse_stat(buf, sector_size) else {
-            return Markup::text(format!("disk {} ", self.display_name()))
-                .append(Markup::bracketed(Markup::text("no such disk").fg(BROWN)));
-        };
-
-        let now = Instant::now();
-        if !self.initialized {
-            self.initialized = true;
-            self.last_r = r;
-            self.last_w = w;
-            self.last_t = now;
-            return Markup::text(format!("disk {} ", self.display_name()))
-                .append(Markup::text("loading").fg(VIOLET));
-        }
-
-        let dt = now.duration_since(self.last_t).as_secs_f64();
-        let dr = r.saturating_sub(self.last_r);
-        let dw = w.saturating_sub(self.last_w);
-        self.last_r = r;
-        self.last_w = w;
-        self.last_t = now;
-
-        let bps_read = if dt > 0.0 { dr as f64 / dt } else { 0.0 };
-        let bps_write = if dt > 0.0 { dw as f64 / dt } else { 0.0 };
-        let bps_read = self.read_ema.feed_and_read(bps_read, now).unwrap_or(&0.0);
-        let bps_write = self.write_ema.feed_and_read(bps_write, now).unwrap_or(&0.0);
-
-        let r_bar = BARS[self
-            .read_threshs
-            .iter()
-            .position(|&t| *bps_read < t)
-            .unwrap_or(BARS.len() - 1)];
-        let w_bar = BARS[self
-            .write_threshs
-            .iter()
-            .position(|&t| *bps_write < t)
-            .unwrap_or(BARS.len() - 1)];
-
-        Markup::text(format!("disk {} ", self.display_name())).append(Markup::bracketed(
-            Markup::text(r_bar)
-                .fg(BLUE)
-                .append(Markup::text(w_bar).fg(ORANGE)),
-        ))
+async fn resolve_name(selector: &Selector, io: &ProbeIo) -> Result<String, ProbeError> {
+    match selector {
+        Selector::Name(name) => Ok(name.clone()),
+        Selector::PartLabel(label) => resolve_link("by-partlabel", label, io).await,
+        Selector::PartUuid(uuid) => resolve_link("by-partuuid", uuid, io).await,
     }
+}
+
+async fn resolve_link(kind: &str, value: &str, io: &ProbeIo) -> Result<String, ProbeError> {
+    let target = io.read_link(format!("/dev/disk/{kind}/{value}")).await?;
+    target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| ProbeError::Unit("disk selector resolved to an invalid name".to_owned()))
+}
+
+fn selector_value(selector: &Selector) -> String {
+    match selector {
+        Selector::Name(value) | Selector::PartLabel(value) | Selector::PartUuid(value) => {
+            value.clone()
+        }
+    }
+}
+
+fn parse_u64(bytes: &[u8]) -> Result<u64, ProbeError> {
+    str::from_utf8(bytes)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .ok_or_else(|| ProbeError::Unit("invalid disk sector size".to_owned()))
+}
+
+fn parse_stat(bytes: &[u8]) -> Result<(u64, u64), ProbeError> {
+    let mut fields = str::from_utf8(bytes)
+        .map_err(|error| ProbeError::Unit(format!("invalid disk stat encoding: {error}")))?
+        .split_whitespace();
+    let read = fields
+        .nth(2)
+        .ok_or_else(|| ProbeError::Unit("short disk stat row".to_owned()))?
+        .parse()
+        .map_err(|error| ProbeError::Unit(format!("invalid disk read counter: {error}")))?;
+    let written = fields
+        .nth(3)
+        .ok_or_else(|| ProbeError::Unit("short disk stat row".to_owned()))?
+        .parse()
+        .map_err(|error| ProbeError::Unit(format!("invalid disk write counter: {error}")))?;
+    Ok((read, written))
+}
+
+fn rate(current: u64, previous: u64, elapsed: f64) -> f64 {
+    if elapsed > 0.0 {
+        current.saturating_sub(previous) as f64 / elapsed
+    } else {
+        0.0
+    }
+}
+
+fn bar(value: f64, peak: f64) -> &'static str {
+    if value <= 1.0 {
+        return BARS[0];
+    }
+    let level = (value.ln() / peak.ln() * 8.0).clamp(1.0, 8.0) as usize;
+    BARS[level]
 }

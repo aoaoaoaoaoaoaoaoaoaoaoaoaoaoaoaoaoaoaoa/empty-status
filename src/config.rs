@@ -1,297 +1,157 @@
-use anyhow::{Context, Result};
-use serde::Deserialize;
+use std::{fs, path::PathBuf, time::Duration};
+
+use anyhow::{Context, Result, anyhow};
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_inline_default::serde_inline_default;
-use std::{fs, path::PathBuf};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 use xdg::BaseDirectories;
 
-use crate::core::{EmptyStatus, RED};
-use crate::machine::runtime::{MachineWrapper, spawn_machine_actor};
-use crate::machine::types::{Health, View};
-use crate::machine::units::bat::BatMachine;
-use crate::machine::units::cpu::CpuMachine;
-use crate::machine::units::disk::DiskMachine;
-use crate::machine::units::mem::MemMachine;
-use crate::machine::units::net::NetMachine;
-use crate::machine::units::quota::QuotaMachine;
-use crate::machine::units::time::TimeMachine;
-use crate::machine::units::weather::WeatherMachine;
-use crate::machine::units::wifi::WifiMachine;
-use crate::render::markup::Markup;
+use crate::{
+    probe_io::ProbeIo,
+    reactor::{Reactor, Slot},
+    units::{self, Unit},
+};
 
 const CONFIG_PREFIX: &str = "empty-status";
 const CONFIG_FILE: &str = "config.toml";
+const DEFAULT_FAST_POLL_INTERVAL: f64 = 0.333;
+const DEFAULT_SLOW_POLL_INTERVAL: f64 = 300.0;
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RootConfig {
     #[serde(default)]
-    units: Vec<toml::Value>,
-    #[serde(default)]
     global: GlobalConfig,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(tag = "type")]
-enum UnitConfig {
-    #[serde(rename = "Weather")]
-    Weather(UnitSpec<crate::units::weather::WeatherConfig>),
-    #[serde(rename = "Time")]
-    Time(UnitSpec<crate::units::time::TimeConfig>),
-    #[serde(rename = "Cpu")]
-    Cpu(UnitSpec<crate::units::cpu::CpuConfig>),
-    #[serde(rename = "Mem")]
-    Mem(UnitSpec<crate::units::mem::MemConfig>),
-    #[serde(rename = "Disk")]
-    Disk(UnitSpec<crate::units::disk::DiskConfig>),
-    #[serde(rename = "Wifi")]
-    Wifi(UnitSpec<crate::units::wifi::WifiConfig>),
-    #[serde(rename = "Bat")]
-    Bat(UnitSpec<crate::units::bat::BatConfig>),
-    #[serde(rename = "Net")]
-    Net(UnitSpec<crate::units::net::NetConfig>),
-    #[serde(rename = "Quota")]
-    Quota(UnitSpec<crate::units::quota::QuotaConfig>),
-
-    // Stub for future drop-in units. Intentionally not implemented yet.
-    // When we do, we should make this a hard boundary with explicit schema and effects.
-    #[serde(other)]
-    _External,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-struct UnitSpec<Cfg> {
-    #[serde(flatten)]
-    sched: SchedulingCfg,
-    #[serde(flatten)]
-    cfg: Cfg,
+    #[serde(default)]
+    units: Vec<toml::Value>,
 }
 
 #[serde_inline_default]
-#[derive(Deserialize, Debug, Clone, Copy)]
-pub struct SchedulingCfg {
-    #[serde_inline_default(0.333)]
-    pub poll_interval: f64,
-}
-
-#[derive(Deserialize, Debug, Clone, Copy)]
-#[serde(default)]
-pub struct GlobalConfig {
-    pub min_polling_interval: f64,
-    pub padding: i32,
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlobalConfig {
+    #[serde_inline_default(1)]
+    padding: u8,
 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
-        Self {
-            min_polling_interval: 0.25,
-            padding: 1,
-        }
+        Self { padding: 1 }
     }
 }
 
-pub fn load_status_from_cfg() -> Result<EmptyStatus> {
-    let xdg = BaseDirectories::with_prefix(CONFIG_PREFIX);
-    let path: PathBuf = xdg.place_config_file(CONFIG_FILE)?;
-
+pub fn load() -> Result<Reactor> {
+    let path = config_path()?;
     let text = if path.exists() {
         fs::read_to_string(&path)?
     } else {
-        let sample = sample_config();
-        fs::write(&path, sample)?;
-        sample.into()
+        fs::write(&path, sample_config())?;
+        sample_config().to_owned()
     };
-
-    let raw: RootConfig =
+    let root: RootConfig =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-
-    let (click_tx, _) = tokio::sync::broadcast::channel::<crate::core::ClickEvent>(16);
-    let mut machine_wrappers: Vec<MachineWrapper> = Vec::new();
-    let effects = crate::machine::effects::EffectEngine::new();
-
-    for (handle, raw_unit) in raw.units.iter().enumerate() {
-        let uc = match decode_unit_config(raw_unit) {
-            Ok(uc) => uc,
-            Err(e) => {
-                error!("Failed to parse unit {handle}: {e}");
-                machine_wrappers.push(config_error_wrapper(handle, &e));
-                continue;
+    let mut slots = Vec::with_capacity(root.units.len());
+    for (index, raw) in root.units.into_iter().enumerate() {
+        match decode_unit(raw) {
+            Ok((unit, cadence)) => {
+                info!(index, kind = unit.name(), ?cadence, "loaded unit");
+                slots.push(Slot::live(index, unit, cadence));
             }
-        };
-
-        let kind = match &uc {
-            UnitConfig::Weather(spec) => {
-                let mach = std::sync::Arc::new(WeatherMachine::new(spec.cfg.clone()));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Weather"
+            Err(fault) => {
+                error!(index, error = %fault, "unit configuration rejected");
+                slots.push(Slot::broken(index, clipped(&fault.to_string())));
             }
-            UnitConfig::Time(spec) => {
-                let mach = std::sync::Arc::new(TimeMachine::new(spec.cfg.clone()));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Time"
-            }
-            UnitConfig::Cpu(spec) => {
-                let mach = std::sync::Arc::new(CpuMachine::new(spec.cfg.clone()));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Cpu"
-            }
-            UnitConfig::Mem(spec) => {
-                let mach = std::sync::Arc::new(MemMachine::new(spec.cfg));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Mem"
-            }
-            UnitConfig::Disk(spec) => {
-                let mach = std::sync::Arc::new(DiskMachine::new(spec.cfg.clone()));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Disk"
-            }
-            UnitConfig::Wifi(spec) => {
-                let mach = std::sync::Arc::new(WifiMachine::new(spec.cfg.clone()));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Wifi"
-            }
-            UnitConfig::Bat(spec) => {
-                let mach = std::sync::Arc::new(BatMachine::new(spec.cfg.clone()));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Bat"
-            }
-            UnitConfig::Net(spec) => {
-                let mach = std::sync::Arc::new(NetMachine::new(spec.cfg.clone()));
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    spec.sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Net"
-            }
-            UnitConfig::Quota(spec) => {
-                let mach = std::sync::Arc::new(QuotaMachine::new(spec.cfg.clone()));
-                let sched = canonical_quota_sched(spec.sched);
-                machine_wrappers.push(spawn_machine_actor(
-                    mach,
-                    effects.clone(),
-                    sched,
-                    raw.global,
-                    handle,
-                    &click_tx,
-                ));
-                "Quota"
-            }
-            UnitConfig::_External => {
-                warn!("Skipping external unit type (not implemented yet)");
-                "External"
-            }
-        };
-
-        info!("Successfully loaded unit '{kind}'");
-        debug!("Unit config: {uc:?}");
+        }
     }
-
-    info!("Using global config: {:?}", raw.global);
-    Ok(EmptyStatus::new(raw.global, machine_wrappers, click_tx))
+    Ok(Reactor::new(slots, root.global.padding, ProbeIo::new()?))
 }
 
-fn canonical_quota_sched(sched: SchedulingCfg) -> SchedulingCfg {
-    SchedulingCfg {
-        poll_interval: crate::machine::units::quota::canonical_poll_interval(sched.poll_interval),
+fn config_path() -> Result<PathBuf> {
+    BaseDirectories::with_prefix(CONFIG_PREFIX)
+        .place_config_file(CONFIG_FILE)
+        .map_err(Into::into)
+}
+
+fn decode_unit(raw: toml::Value) -> Result<(Unit, Duration)> {
+    let mut table = raw
+        .as_table()
+        .cloned()
+        .ok_or_else(|| anyhow!("unit must be a TOML table"))?;
+    let kind = table
+        .remove("type")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| anyhow!("unit requires a string `type`"))?;
+    let poll_interval = table
+        .remove("poll_interval")
+        .map_or(Ok(default_poll_interval(&kind)), number)?;
+    let config = toml::Value::Table(table);
+    let unit = match kind.as_str() {
+        "Bat" => Unit::Bat(
+            units::bat::Model::new(decode(config)?).map_err(|error| anyhow!("Bat: {error}"))?,
+        ),
+        "Cpu" => Unit::Cpu(units::cpu::Model::new(decode(config)?)),
+        "Disk" => Unit::Disk(
+            units::disk::Model::new(decode(config)?).map_err(|error| anyhow!("Disk: {error}"))?,
+        ),
+        "Mem" => Unit::Mem(units::mem::Model::new(decode(config)?)),
+        "Net" => Unit::Net(
+            units::net::Model::new(decode(config)?).map_err(|error| anyhow!("Net: {error}"))?,
+        ),
+        "Quota" => Unit::Quota(
+            units::quota::Model::new(decode(config)?).map_err(|error| anyhow!("Quota: {error}"))?,
+        ),
+        "Time" => Unit::Time(
+            units::time::Model::new(decode(config)?).map_err(|error| anyhow!("Time: {error}"))?,
+        ),
+        "Weather" => Unit::Weather(
+            units::weather::Model::new(decode(config)?)
+                .map_err(|error| anyhow!("Weather: {error}"))?,
+        ),
+        "Wifi" => Unit::Wifi(
+            units::wifi::Model::new(decode(config)?).map_err(|error| anyhow!("Wifi: {error}"))?,
+        ),
+        _ => return Err(anyhow!("unknown unit type `{kind}`")),
+    };
+    let requested =
+        units::positive_duration("poll_interval", poll_interval).map_err(anyhow::Error::msg)?;
+    let cadence = unit.canonical_cadence(requested);
+    Ok((unit, cadence))
+}
+
+fn default_poll_interval(kind: &str) -> f64 {
+    match kind {
+        "Quota" | "Weather" => DEFAULT_SLOW_POLL_INTERVAL,
+        _ => DEFAULT_FAST_POLL_INTERVAL,
     }
 }
 
-fn decode_unit_config(raw: &toml::Value) -> Result<UnitConfig, toml::de::Error> {
-    raw.clone().try_into()
+fn decode<C: DeserializeOwned>(value: toml::Value) -> Result<C> {
+    value.try_into().map_err(Into::into)
 }
 
-fn config_error_wrapper(handle: usize, error: &toml::de::Error) -> MachineWrapper {
-    let message = clipped_error_message(&error.to_string().replace('\n', " "));
-
-    let body = Markup::text(format!("unit {handle} "))
-        .append(Markup::text("bad config: ").fg(RED))
-        .append(Markup::text(message).fg(RED));
-    let (_view_tx, view_rx) = tokio::sync::watch::channel(View {
-        body,
-        health: Health::Error,
-    });
-
-    MachineWrapper {
-        i3_name: format!("Config::{handle}"),
-        handle,
-        view_rx,
-    }
+fn number(value: toml::Value) -> Result<f64> {
+    value
+        .as_float()
+        .or_else(|| value.as_integer().map(|value| value as f64))
+        .ok_or_else(|| anyhow!("poll_interval must be a number"))
 }
 
-fn clipped_error_message(message: &str) -> String {
-    const MAX_MESSAGE_CHARS: usize = 160;
-    let mut chars = message.chars();
-    let clipped = chars.by_ref().take(MAX_MESSAGE_CHARS).collect::<String>();
-    if chars.next().is_some() {
-        format!("{clipped}…")
+fn clipped(message: &str) -> String {
+    const LIMIT: usize = 160;
+    let mut characters = message.chars();
+    let prefix = characters.by_ref().take(LIMIT).collect::<String>();
+    if characters.next().is_some() {
+        format!("{prefix}…")
     } else {
-        clipped
+        prefix
     }
 }
 
 fn sample_config() -> &'static str {
-    r#"# Global config.
+    r#"# Units are declared from rightmost to leftmost.
 
 [global]
-min_polling_interval = 0.15
 padding = 1
-
-# Units appear on the bar in the same order as they are defined here.
-# Topmost is rightmost.
 
 [[units]]
 type = "Time"
@@ -302,32 +162,72 @@ format = "%a %b %d %Y - %H:%M"
 
 #[cfg(test)]
 mod tests {
-    use super::{RootConfig, decode_unit_config};
+    use std::time::Duration;
+
+    use super::{RootConfig, decode_unit};
 
     #[test]
-    fn malformed_unit_config_does_not_poison_root_decode() {
-        let text = r#"
-[global]
-min_polling_interval = 0.25
-padding = 1
+    fn malformed_unit_does_not_poison_root() {
+        let root = toml::from_str::<RootConfig>(
+            r#"
+                [[units]]
+                type = "Time"
 
-[[units]]
-type = "Time"
+                [[units]]
+                type = "Disk"
 
-[[units]]
-type = "Disk"
+                [[units]]
+                type = "Mem"
+            "#,
+        );
+        assert!(root.is_ok());
+        let Ok(root) = root else { return };
+        assert!(decode_unit(root.units[0].clone()).is_ok());
+        assert!(decode_unit(root.units[1].clone()).is_err());
+        assert!(decode_unit(root.units[2].clone()).is_ok());
+    }
 
-[[units]]
-type = "Mem"
-"#;
-        let decoded = toml::from_str::<RootConfig>(text);
-        assert!(decoded.is_ok());
-        let Ok(root) = decoded else {
+    #[test]
+    fn example_is_normative() {
+        let root = toml::from_str::<RootConfig>(include_str!("../config.example.toml"));
+        assert!(root.is_ok());
+        let Ok(root) = root else { return };
+        for unit in root.units {
+            assert!(decode_unit(unit).is_ok());
+        }
+    }
+
+    #[test]
+    fn expensive_units_have_cadence_floors() {
+        let weather = toml::from_str::<toml::Value>(
+            r#"type = "Weather"
+               poll_interval = 1
+               lat = 0
+               lon = 0"#,
+        );
+        let quota = toml::from_str::<toml::Value>(
+            r#"type = "Quota"
+               poll_interval = 1"#,
+        );
+        assert!(weather.is_ok());
+        assert!(quota.is_ok());
+        let (Ok(weather), Ok(quota)) = (weather, quota) else {
             return;
         };
-        assert_eq!(root.units.len(), 3);
-        assert!(decode_unit_config(&root.units[0]).is_ok());
-        assert!(decode_unit_config(&root.units[1]).is_err());
-        assert!(decode_unit_config(&root.units[2]).is_ok());
+        let weather = decode_unit(weather).map(|(_, cadence)| cadence);
+        let quota = decode_unit(quota).map(|(_, cadence)| cadence);
+        assert_eq!(weather.ok(), Some(Duration::from_mins(2)));
+        assert_eq!(quota.ok(), Some(Duration::from_secs(15)));
+    }
+
+    #[test]
+    fn absurd_cadence_becomes_a_broken_slot_instead_of_panicking() {
+        let unit = toml::from_str::<toml::Value>(
+            r#"type = "Time"
+               poll_interval = 1e300"#,
+        );
+        assert!(unit.is_ok());
+        let Ok(unit) = unit else { return };
+        assert!(decode_unit(unit).is_err());
     }
 }
