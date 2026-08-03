@@ -131,7 +131,8 @@ including a boolean `separator`.
 Weather temperature and AQI share one continuous Base16 cold-to-hot gradient.
 AQI 0 occupies the same cyan knot as 45°F; AQI 200 reaches terminal violet, and
 higher values remain violet. Relative humidity is rounded to an integral
-percentage and rendered in cyan without imposing a health classification.
+percentage and follows a distinct dry-yellow, comfort-green, swamp-green,
+bog-brown, corpse-purple gradient without imposing a health classification.
 
 ## Errors
 

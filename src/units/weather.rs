@@ -42,6 +42,23 @@ const AQI_COLORS: Gradient<5> = Gradient::new(
         Knot::new(200.0, VIOLET),
     ],
 );
+const SWAMP_GREEN: Rgb8 = Rgb8::new(0x7E, 0x9F, 0x54);
+const BOG_GREEN: Rgb8 = Rgb8::new(0x66, 0x84, 0x4F);
+const ROT_BROWN: Rgb8 = Rgb8::new(0x91, 0x65, 0x4F);
+const CORPSE_PURPLE: Rgb8 = Rgb8::new(0x87, 0x5F, 0x70);
+const FETID_VIOLET: Rgb8 = Rgb8::new(0x98, 0x71, 0x8F);
+const HUMIDITY_COLORS: Gradient<7> = Gradient::new(
+    Knot::new(0.0, YELLOW),
+    [
+        Knot::new(30.0, YELLOW),
+        Knot::new(45.0, GREEN),
+        Knot::new(62.0, SWAMP_GREEN),
+        Knot::new(76.0, BOG_GREEN),
+        Knot::new(86.0, ROT_BROWN),
+        Knot::new(93.0, CORPSE_PURPLE),
+        Knot::new(100.0, FETID_VIOLET),
+    ],
+);
 
 cycle!(
     enum Horizon {
@@ -459,7 +476,7 @@ impl RelativeHumidity {
     }
 
     fn markup(self) -> Markup {
-        Markup::text(format!("{:>3}%", self.0)).fg(CYAN)
+        Markup::text(format!("{:>3}%", self.0)).fg(HUMIDITY_COLORS.sample(f64::from(self.0)))
     }
 }
 
@@ -716,7 +733,8 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        AQI_COLORS, AirPoint, Aqi, CYAN_CELSIUS, Config, Health, Model, RelativeHumidity, Series,
+        AQI_COLORS, AirPoint, Aqi, BOG_GREEN, CORPSE_PURPLE, CYAN_CELSIUS, Config, FETID_VIOLET,
+        HUMIDITY_COLORS, Health, Model, ROT_BROWN, RelativeHumidity, SWAMP_GREEN, Series,
         WeatherPoint, Wmo, forecast_targets, parse_air, parse_weather, temperature_color,
     };
     use crate::{
@@ -772,6 +790,23 @@ mod tests {
         ];
         for (aqi, color) in anchors {
             assert_eq!(AQI_COLORS.sample(f64::from(aqi)), color);
+        }
+    }
+
+    #[test]
+    fn humidity_decays_from_comfort_green_into_corpse_purple() {
+        let anchors = [
+            (0, YELLOW),
+            (30, YELLOW),
+            (45, GREEN),
+            (62, SWAMP_GREEN),
+            (76, BOG_GREEN),
+            (86, ROT_BROWN),
+            (93, CORPSE_PURPLE),
+            (100, FETID_VIOLET),
+        ];
+        for (humidity, color) in anchors {
+            assert_eq!(HUMIDITY_COLORS.sample(f64::from(humidity)), color);
         }
     }
 

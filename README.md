@@ -98,7 +98,9 @@ normative schema.
 Weather's left mouse button cycles immediate/forecast while the right button
 cycles temperature/relative humidity/U.S. AQI, producing six independent
 display states. Relative humidity is Open-Meteo's 2 m instantaneous forecast
-value. AQI is the consolidated U.S. index from Open-Meteo's global
+value. Its colors run from dry yellow through comfort and swamp greens, then
+decay through bog brown into corpse purple. AQI is the consolidated U.S. index
+from Open-Meteo's global
 [Air Quality API](https://open-meteo.com/en/docs/air-quality-api); it is a CAMS
 model forecast rather than a nearby AirNow station observation. Values retain
 the [EPA's U.S. AQI category boundaries](https://www.epa.gov/outdoor-air-quality-data/airdata-basic-information),
