@@ -140,6 +140,11 @@ The OpenRouter source calls `GET /api/v1/credits`. Its `token_file` must contain
 an OpenRouter management key and must be an absolute path. The file is read at
 each poll; its contents never appear in configuration text or logs.
 
+Selected unit modes survive process and i3 restarts in
+`$XDG_STATE_HOME/empty-status/posture.json`. The state file is atomically
+replaced after mode changes. Missing, malformed, incompatible, and unwritable
+state silently falls back to each unit's default mode and never blocks startup.
+
 Fast checks:
 
 ```bash

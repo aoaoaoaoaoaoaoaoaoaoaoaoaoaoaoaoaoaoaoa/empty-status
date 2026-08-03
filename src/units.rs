@@ -1,5 +1,7 @@
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     core::{Button, View},
     probe_io::{ProbeIo, TransportError},
@@ -24,6 +26,24 @@ macro_rules! cycle {
                 $name::advance(self);
             }
         }
+
+        impl $crate::units::RestorableCycle for $name {
+            fn point(&self) -> &'static str {
+                match self {
+                    Self::$first => stringify!($first),
+                    $(Self::$rest => stringify!($rest)),+
+                }
+            }
+
+            fn seek(&mut self, point: &str) -> bool {
+                match point {
+                    stringify!($first) => *self = Self::$first,
+                    $(stringify!($rest) => *self = Self::$rest,)+
+                    _ => return false,
+                }
+                true
+            }
+        }
     };
     (@match $value:expr; $first:ident; [$($arms:tt)*]; $point:ident, $next:ident, $($rest:ident),+) => {
         cycle!(@match $value; $first; [$($arms)* Self::$point => Self::$next,]; $next, $($rest),+)
@@ -33,6 +53,31 @@ macro_rules! cycle {
             $($arms)*
             Self::$point => Self::$last,
             Self::$last => Self::$first,
+        }
+    };
+}
+
+macro_rules! persist {
+    ($model:ident.$field:ident) => {
+        impl $crate::units::Persistent for $model {
+            fn posture(&self) -> $crate::units::Posture {
+                $crate::units::Posture::from_cycle(&self.$field)
+            }
+
+            fn restore(&mut self, posture: &$crate::units::Posture) -> bool {
+                posture.restore_cycle(&mut self.$field)
+            }
+        }
+    };
+    ($model:ident.$field:ident, orbit) => {
+        impl $crate::units::Persistent for $model {
+            fn posture(&self) -> $crate::units::Posture {
+                $crate::units::Posture::from_orbit(&self.$field)
+            }
+
+            fn restore(&mut self, posture: &$crate::units::Posture) -> bool {
+                posture.restore_orbit(&mut self.$field)
+            }
         }
     };
 }
@@ -50,6 +95,20 @@ pub mod wifi;
 pub trait Cycle {
     fn advance(&mut self);
 }
+
+pub trait RestorableCycle: Cycle + Clone {
+    fn point(&self) -> &'static str;
+    fn seek(&mut self, point: &str) -> bool;
+}
+
+trait Persistent {
+    fn posture(&self) -> Posture;
+    fn restore(&mut self, posture: &Posture) -> bool;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Posture(Box<[String]>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FiniteCycle<T> {
@@ -73,6 +132,14 @@ impl<T> FiniteCycle<T> {
 
     pub fn points(&self) -> &[T] {
         &self.points
+    }
+
+    pub fn seek(&mut self, predicate: impl Fn(&T) -> bool) -> bool {
+        let Some(focus) = self.points.iter().position(predicate) else {
+            return false;
+        };
+        self.focus = focus;
+        true
     }
 }
 
@@ -110,6 +177,45 @@ impl<L: Cycle, R: Cycle> MouseOrbit<L, R> {
             Button::Middle | Button::Other(_) => return false,
         }
         true
+    }
+}
+
+impl Posture {
+    fn from_cycle<C: RestorableCycle>(cycle: &C) -> Self {
+        Self(vec![cycle.point().to_owned()].into_boxed_slice())
+    }
+
+    fn from_orbit<L: RestorableCycle, R: RestorableCycle>(orbit: &MouseOrbit<L, R>) -> Self {
+        Self(
+            vec![
+                orbit.left.point().to_owned(),
+                orbit.right.point().to_owned(),
+            ]
+            .into_boxed_slice(),
+        )
+    }
+
+    fn restore_cycle<C: RestorableCycle>(&self, cycle: &mut C) -> bool {
+        let [point] = self.0.as_ref() else {
+            return false;
+        };
+        cycle.seek(point)
+    }
+
+    fn restore_orbit<L: RestorableCycle, R: RestorableCycle>(
+        &self,
+        orbit: &mut MouseOrbit<L, R>,
+    ) -> bool {
+        let [left, right] = self.0.as_ref() else {
+            return false;
+        };
+        let original = orbit.clone();
+        if orbit.left.seek(left) && orbit.right.seek(right) {
+            true
+        } else {
+            *orbit = original;
+            false
+        }
     }
 }
 
@@ -270,6 +376,34 @@ impl Unit {
             Self::Wifi(model) => model.click(button),
         }
     }
+
+    pub fn posture(&self) -> Option<Posture> {
+        match self {
+            Self::Bat(model) => Some(model.posture()),
+            Self::Cpu(model) => Some(model.posture()),
+            Self::Disk(_) => None,
+            Self::Mem(model) => Some(model.posture()),
+            Self::Net(model) => Some(model.posture()),
+            Self::Quota(model) => Some(model.posture()),
+            Self::Time(model) => Some(model.posture()),
+            Self::Weather(model) => Some(model.posture()),
+            Self::Wifi(model) => Some(model.posture()),
+        }
+    }
+
+    pub fn restore(&mut self, posture: &Posture) -> bool {
+        match self {
+            Self::Bat(model) => model.restore(posture),
+            Self::Cpu(model) => model.restore(posture),
+            Self::Disk(_) => false,
+            Self::Mem(model) => model.restore(posture),
+            Self::Net(model) => model.restore(posture),
+            Self::Quota(model) => model.restore(posture),
+            Self::Time(model) => model.restore(posture),
+            Self::Weather(model) => model.restore(posture),
+            Self::Wifi(model) => model.restore(posture),
+        }
+    }
 }
 
 async fn within<T>(
@@ -325,7 +459,7 @@ pub fn positive_duration(name: &str, seconds: f64) -> Result<Duration, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Button, Cycle, FiniteCycle, MouseOrbit};
+    use super::{Button, Cycle, FiniteCycle, MouseOrbit, Posture};
 
     cycle!(
         enum Bit {
@@ -383,5 +517,29 @@ mod tests {
             assert_eq!(*cycle.focus(), expected);
             cycle.advance();
         }
+    }
+
+    #[test]
+    fn named_posture_restores_an_orbit_atomically() {
+        let mut source = MouseOrbit::new(Bit::Zero, Trit::Zero);
+        assert!(source.act(Button::Left));
+        assert!(source.act(Button::Right));
+        assert!(source.act(Button::Right));
+        let encoded = serde_json::to_string(&Posture::from_orbit(&source));
+        assert!(encoded.is_ok());
+        let Ok(encoded) = encoded else { return };
+        let posture = serde_json::from_str::<Posture>(&encoded);
+        assert!(posture.is_ok());
+        let Ok(posture) = posture else { return };
+        let mut restored = MouseOrbit::new(Bit::Zero, Trit::Zero);
+        assert!(posture.restore_orbit(&mut restored));
+        assert_eq!(restored, source);
+
+        let invalid = serde_json::from_str::<Posture>(r#"["One","Vanished"]"#);
+        assert!(invalid.is_ok());
+        let Ok(invalid) = invalid else { return };
+        let original = restored;
+        assert!(!invalid.restore_orbit(&mut restored));
+        assert_eq!(restored, original);
     }
 }

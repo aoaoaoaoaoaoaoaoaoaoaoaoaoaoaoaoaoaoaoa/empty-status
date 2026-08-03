@@ -56,6 +56,8 @@ pub struct Model {
     pings: VecDeque<Option<f64>>,
 }
 
+persist!(Model.mode);
+
 #[derive(Debug)]
 pub enum Request {
     Bandwidth { interface: String },

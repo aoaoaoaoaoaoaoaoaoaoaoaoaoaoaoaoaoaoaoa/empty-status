@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -9,6 +9,7 @@ use xdg::BaseDirectories;
 use crate::{
     probe_io::ProbeIo,
     reactor::{Reactor, Slot},
+    state::{SlotIdentity, Store},
     units::{self, Unit},
 };
 
@@ -51,11 +52,16 @@ pub fn load() -> Result<Reactor> {
     let root: RootConfig =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     let mut slots = Vec::with_capacity(root.units.len());
+    let mut occurrences = HashMap::new();
     for (index, raw) in root.units.into_iter().enumerate() {
+        let identity = SlotIdentity::from_config(&raw);
+        let occurrence = occurrences.entry(identity).or_insert(0);
+        let state_key = identity.key(*occurrence);
+        *occurrence += 1;
         match decode_unit(raw) {
             Ok((unit, cadence)) => {
                 info!(index, kind = unit.name(), ?cadence, "loaded unit");
-                slots.push(Slot::live(index, unit, cadence));
+                slots.push(Slot::live(index, state_key, unit, cadence));
             }
             Err(fault) => {
                 error!(index, error = %fault, "unit configuration rejected");
@@ -63,7 +69,12 @@ pub fn load() -> Result<Reactor> {
             }
         }
     }
-    Ok(Reactor::new(slots, root.global.padding, ProbeIo::new()?))
+    Ok(Reactor::new(
+        slots,
+        root.global.padding,
+        ProbeIo::new()?,
+        Store::load(),
+    ))
 }
 
 fn config_path() -> Result<PathBuf> {

@@ -19,6 +19,9 @@ plugin seams.
 6. Pango escaping occurs exactly once, when flat `Markup` runs are formatted.
 7. i3bar JSON is produced only by the reactor and uses protocol-native field
    types.
+8. Persisted posture is advisory. Missing, malformed, incompatible, or
+   unwritable state always collapses to the configured unit's default posture;
+   it cannot reject configuration, create an error slot, or abort the bar.
 
 ## Interaction
 
@@ -46,6 +49,26 @@ reset epoch. Claude supplies 5-hour and 1-week percentages, Codex supplies a
 1-week percentage, and OpenRouter supplies an unwindowed U.S.-dollar balance.
 The reset projection renders `no reset` when a provider has no window.
 Middle click requests fresh data without changing either coordinate.
+
+## State
+
+The reactor persists only interaction posture: the selected point of each
+unit's static cycle or mouse orbit. Samples, probe history, views, cadence, and
+configuration remain outside the state file. Static cycle points are stored by
+the names emitted by `cycle!`; configured quota providers are stored by source
+name rather than ordinal.
+
+Posture lives at `$XDG_STATE_HOME/empty-status/posture.json`. The bounded,
+versioned JSON ledger is atomically replaced with mode `0600` after every actual
+mode change. A slot key is a stable fingerprint of its normalized unit stanza,
+excluding `poll_interval`, plus an occurrence number for identical stanzas.
+Unchanged units therefore retain posture across reordering and cadence edits.
+
+State is restored after configuration refinement and before the first probe.
+The file is all-or-default at its serialization boundary; an unknown point is
+defaulted per slot. Read, decode, version, restoration, and write failures emit
+warnings where logging is available and otherwise have no effect on startup or
+interaction.
 
 ## Reactor
 

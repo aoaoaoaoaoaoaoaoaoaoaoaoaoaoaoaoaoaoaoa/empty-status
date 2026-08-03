@@ -29,6 +29,8 @@ pub struct Model {
     mode: Mode,
 }
 
+persist!(Model.mode);
+
 #[derive(Debug, Clone, Copy)]
 pub enum Request {
     Totals,

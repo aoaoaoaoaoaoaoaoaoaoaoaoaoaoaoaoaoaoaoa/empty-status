@@ -45,6 +45,8 @@ pub struct Model {
     power: Ema,
 }
 
+persist!(Model.mode);
+
 #[derive(Debug)]
 pub struct Request {
     path: String,

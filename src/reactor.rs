@@ -1,4 +1,9 @@
-use std::{collections::HashMap, io::Write, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Write,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Result;
 use tokio::{
@@ -10,6 +15,7 @@ use tokio::{
 use crate::{
     core::{I3Block, I3Click, View},
     probe_io::ProbeIo,
+    state::Store,
     units::{Reaction, Reply, Unit},
 };
 
@@ -18,6 +24,7 @@ const FRAME_COALESCE: Duration = Duration::from_millis(10);
 #[derive(Debug)]
 pub struct Slot {
     name: String,
+    state_key: Option<String>,
     unit: Option<Unit>,
     view: View,
     cadence: Duration,
@@ -44,14 +51,16 @@ pub struct Reactor {
     io: Arc<ProbeIo>,
     strikes: JoinSet<Reply>,
     strike_slots: HashMap<Id, Strike>,
+    state: Store,
 }
 
 impl Slot {
-    pub fn live(index: usize, unit: Unit, cadence: Duration) -> Self {
+    pub fn live(index: usize, state_key: String, unit: Unit, cadence: Duration) -> Self {
         let name = format!("{}::{index}", unit.name());
         let view = unit.initial_view();
         Self {
             name,
+            state_key: Some(state_key),
             unit: Some(unit),
             view,
             cadence,
@@ -65,6 +74,7 @@ impl Slot {
     pub fn broken(index: usize, message: impl Into<String>) -> Self {
         Self {
             name: format!("Config::{index}"),
+            state_key: None,
             unit: None,
             view: View::error(&format!("unit {index}"), message),
             cadence: Duration::ZERO,
@@ -75,13 +85,29 @@ impl Slot {
 }
 
 impl Reactor {
-    pub fn new(slots: Vec<Slot>, padding: u8, io: Arc<ProbeIo>) -> Self {
+    pub fn new(mut slots: Vec<Slot>, padding: u8, io: Arc<ProbeIo>, mut state: Store) -> Self {
+        let mut postures = BTreeMap::new();
+        for slot in &mut slots {
+            let (Some(key), Some(unit)) = (slot.state_key.as_ref(), slot.unit.as_mut()) else {
+                continue;
+            };
+            if let Some(posture) = state.get(key)
+                && !unit.restore(posture)
+            {
+                tracing::warn!(slot = %slot.name, "invalid saved posture; using default");
+            }
+            if let Some(posture) = unit.posture() {
+                let _ = postures.insert(key.clone(), posture);
+            }
+        }
+        state.reconcile(postures);
         Self {
             slots,
             padding,
             io,
             strikes: JoinSet::new(),
             strike_slots: HashMap::new(),
+            state,
         }
     }
 
@@ -221,30 +247,42 @@ impl Reactor {
     }
 
     fn click(&mut self, click: I3Click) -> bool {
-        let Some(slot) = self.slots.iter_mut().find(|slot| slot.name == click.name) else {
+        let Some(index) = self.slots.iter().position(|slot| slot.name == click.name) else {
             return false;
         };
-        let Some(unit) = slot.unit.as_mut() else {
-            return false;
+        let (changed, posture) = {
+            let slot = &mut self.slots[index];
+            let Some(unit) = slot.unit.as_mut() else {
+                return false;
+            };
+            let before = unit.posture();
+            let reaction = unit.click(click.button());
+            let after = unit.posture();
+            let posture = (before != after).then_some(after).flatten();
+            let changed = match reaction {
+                Reaction::Inert => false,
+                Reaction::Publish(view) => {
+                    let changed = slot.view != view;
+                    slot.view = view;
+                    changed
+                }
+                Reaction::Refresh => {
+                    slot.revision = slot.revision.wrapping_add(1);
+                    slot.pulse = slot.pulse.map(|pulse| match pulse {
+                        Pulse::Sheathed { .. } => Pulse::Sheathed {
+                            due: Instant::now(),
+                        },
+                        Pulse::Cutting => Pulse::Cutting,
+                    });
+                    false
+                }
+            };
+            (changed, posture)
         };
-        match unit.click(click.button()) {
-            Reaction::Inert => false,
-            Reaction::Publish(view) => {
-                let changed = slot.view != view;
-                slot.view = view;
-                changed
-            }
-            Reaction::Refresh => {
-                slot.revision = slot.revision.wrapping_add(1);
-                slot.pulse = slot.pulse.map(|pulse| match pulse {
-                    Pulse::Sheathed { .. } => Pulse::Sheathed {
-                        due: Instant::now(),
-                    },
-                    Pulse::Cutting => Pulse::Cutting,
-                });
-                false
-            }
+        if let (Some(key), Some(posture)) = (self.slots[index].state_key.clone(), posture) {
+            self.state.record(key, posture);
         }
+        changed
     }
 
     fn next_deadline(&self) -> Option<Instant> {
@@ -289,14 +327,20 @@ fn decode_click(line: &str) -> Option<I3Click> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{fs, time::Duration};
 
     use super::{Pulse, Reactor, Slot, Strike, decode_click};
     use crate::{
         core::I3Click,
         probe_io::ProbeIo,
-        units::{Reply, Unit, time},
+        state::Store,
+        units::{Reply, Request, Unit, time},
     };
+
+    fn time_unit() -> Option<Unit> {
+        let config = toml::from_str::<time::Config>(r#"format = "%H:%M""#).ok()?;
+        time::Model::new(config).ok().map(Unit::Time)
+    }
 
     #[test]
     fn accepts_i3_comma_prefix() {
@@ -306,19 +350,20 @@ mod tests {
 
     #[test]
     fn click_decapitates_an_in_flight_old_mode() {
-        let config = toml::from_str::<time::Config>(r#"format = "%H:%M""#);
-        assert!(config.is_ok());
-        let Ok(config) = config else { return };
-        let model = time::Model::new(config);
-        assert!(model.is_ok());
-        let Ok(model) = model else { return };
+        let Some(unit) = time_unit() else { return };
         let io = ProbeIo::new();
         assert!(io.is_ok());
         let Ok(io) = io else { return };
         let mut reactor = Reactor::new(
-            vec![Slot::live(0, Unit::Time(model), Duration::from_secs(1))],
+            vec![Slot::live(
+                0,
+                "time".to_owned(),
+                unit,
+                Duration::from_secs(1),
+            )],
             0,
             io,
+            Store::empty(),
         );
         reactor.slots[0].pulse = Some(Pulse::Cutting);
         assert!(!reactor.click(I3Click {
@@ -338,5 +383,62 @@ mod tests {
             Some(Pulse::Sheathed { .. })
         ));
         assert!(!reactor.slots[0].view.body.to_string().contains("stale"));
+    }
+
+    #[test]
+    fn restart_restores_posture_before_the_first_probe() {
+        let root =
+            std::env::temp_dir().join(format!("empty-status-reactor-state-{}", std::process::id()));
+        let path = root.join("posture.json");
+        let _ = fs::remove_dir_all(&root);
+        let Some(first_unit) = time_unit() else {
+            return;
+        };
+        let io = ProbeIo::new();
+        assert!(io.is_ok());
+        let Ok(io) = io else { return };
+        let mut first = Reactor::new(
+            vec![Slot::live(
+                0,
+                "time".to_owned(),
+                first_unit,
+                Duration::from_secs(1),
+            )],
+            0,
+            io,
+            Store::at(path.clone()),
+        );
+        assert!(!first.click(I3Click {
+            name: "Time::0".to_owned(),
+            button: 1,
+        }));
+        assert!(matches!(
+            first.slots[0].unit.as_ref().map(Unit::request),
+            Some(Request::Time(time::Request::Uptime))
+        ));
+        drop(first);
+
+        let Some(restored_unit) = time_unit() else {
+            return;
+        };
+        let io = ProbeIo::new();
+        assert!(io.is_ok());
+        let Ok(io) = io else { return };
+        let restored = Reactor::new(
+            vec![Slot::live(
+                0,
+                "time".to_owned(),
+                restored_unit,
+                Duration::from_secs(1),
+            )],
+            0,
+            io,
+            Store::at(path),
+        );
+        assert!(matches!(
+            restored.slots[0].unit.as_ref().map(Unit::request),
+            Some(Request::Time(time::Request::Uptime))
+        ));
+        assert!(fs::remove_dir_all(root).is_ok());
     }
 }

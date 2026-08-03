@@ -26,7 +26,7 @@ use crate::{
         color::{GREY, VIOLET},
         markup::Markup,
     },
-    units::{Cycle, FiniteCycle, MouseOrbit, ProbeError, Reaction, error_view},
+    units::{Cycle, FiniteCycle, MouseOrbit, ProbeError, Reaction, RestorableCycle, error_view},
 };
 
 pub const TIMEOUT: Duration = Duration::from_secs(10);
@@ -117,6 +117,8 @@ pub struct Model {
     latest: Option<Sample>,
 }
 
+persist!(Model.modes, orbit);
+
 #[derive(Debug, Clone)]
 pub struct Request {
     providers: Providers,
@@ -196,6 +198,16 @@ impl Cycle for Providers {
     }
 }
 
+impl RestorableCycle for Providers {
+    fn point(&self) -> &'static str {
+        self.selected().key()
+    }
+
+    fn seek(&mut self, point: &str) -> bool {
+        self.0.seek(|provider| provider.provider().key() == point)
+    }
+}
+
 impl<'de> Deserialize<'de> for Providers {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -226,6 +238,14 @@ impl fmt::Display for Provider {
 }
 
 impl Provider {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::OpenRouter => "OpenRouter",
+        }
+    }
+
     const fn sigil(self) -> &'static str {
         match self {
             Self::Claude => "cc",

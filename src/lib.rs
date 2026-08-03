@@ -8,6 +8,7 @@ mod display;
 mod probe_io;
 mod reactor;
 mod render;
+mod state;
 mod units;
 mod util;
 

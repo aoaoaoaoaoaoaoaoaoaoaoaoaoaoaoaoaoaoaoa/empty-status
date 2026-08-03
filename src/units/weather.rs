@@ -101,6 +101,8 @@ pub struct Model {
     latest: Option<Sample>,
 }
 
+persist!(Model.modes, orbit);
+
 #[derive(Debug, Clone)]
 pub struct Request {
     weather_url: Url,

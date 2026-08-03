@@ -37,6 +37,8 @@ pub struct Model {
     load_breakpoints: [f64; 4],
 }
 
+persist!(Model.mode);
+
 #[derive(Debug)]
 pub enum Request {
     DateTime(String),

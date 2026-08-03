@@ -35,6 +35,8 @@ pub struct Model {
     mode: Mode,
 }
 
+persist!(Model.mode);
+
 #[derive(Debug)]
 pub struct Request {
     interface: String,

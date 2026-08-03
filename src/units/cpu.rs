@@ -32,6 +32,8 @@ pub struct Model {
     previous: Option<CpuTimes>,
 }
 
+persist!(Model.mode);
+
 #[derive(Debug, Clone, Copy)]
 pub struct Request;
 
