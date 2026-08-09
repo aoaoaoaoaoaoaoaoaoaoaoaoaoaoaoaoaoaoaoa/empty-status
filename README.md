@@ -1,3 +1,5 @@
+# empty-status
+
 ```
                                  i3i3i3i                                        
                                  i3i3i3i3i3                                     
@@ -72,87 +74,127 @@
               i3i                                                               
 ```
 
-## Dev
+`empty-status` is a closed, interactive [i3bar](https://i3wm.org/docs/i3bar-protocol.html)
+status line for Linux. One asynchronous reactor owns polling, clicks, rendering,
+and persistence; malformed unit configuration becomes an inert red block rather
+than killing its neighbors.
 
-Design is specified in `SPEC.md`. This document is the authoritative, living
-description of the current architecture and invariants.
+The built-in units cover battery, CPU, disks, memory, networking, time, weather,
+Wi-Fi, and Claude/Codex/OpenRouter quota telemetry. There is deliberately no
+plugin runtime.
 
-## Config
+## Install
 
-Config lives at `$XDG_CONFIG_HOME/empty-status/config.toml`.
+Installation from crates.io requires Linux and Rust 1.94 or newer:
 
-Schema:
-
-- The sole global key is `[global].padding`.
-- Units are `[[units]]` tables.
-- Each unit must specify:
-  - `type = "..."`
-  - optional `poll_interval = <seconds>`
-  - plus any unit-specific keys.
-
-Unknown keys are rejected. Unit stanzas are ordered from rightmost to leftmost.
-Weather polls no faster than 120 seconds and Quota no faster than 15 seconds;
-their default cadence is 300 seconds. `config.example.toml` is the complete
-normative schema.
-
-Weather's left mouse button cycles immediate/forecast while the right button
-cycles temperature/relative humidity/U.S. AQI, producing six independent
-display states. Relative humidity is Open-Meteo's 2 m instantaneous forecast
-value. Its colors run from dry yellow through comfort and swamp greens, then
-decay through bog brown into corpse purple. AQI is the consolidated U.S. index
-from Open-Meteo's global
-[Air Quality API](https://open-meteo.com/en/docs/air-quality-api); it is a CAMS
-model forecast rather than a nearby AirNow station observation. Values retain
-the [EPA's U.S. AQI category boundaries](https://www.epa.gov/outdoor-air-quality-data/airdata-basic-information),
-but colors use the bar's continuous Base16 cold-to-hot scale and saturate at
-violet for AQI 200.
-
-Air-quality data attribution: Open-Meteo and CAMS ENSEMBLE data provided by the
-Copernicus Atmosphere Monitoring Service.
-
-Quota's right mouse button cycles the configured providers; its left button
-toggles remaining quantities and reset windows. Provider order is configuration
-order. Middle click forces an immediate refresh. Claude and Codex report
-percentages, while OpenRouter reports remaining U.S. dollars:
-
-```toml
-providers = [
-  { source = "claude" },
-  { source = "codex" },
-  { source = "openrouter", token_file = "/absolute/path/to/openrouter-management-key" },
-]
+```sh
+cargo install --locked empty-status
 ```
 
-Claude Code subscription telemetry comes from its supported `statusLine` JSON
-surface. Configure Claude Code to let `empty-status` write the shared quota
-cache:
+Then make it i3bar's status command:
+
+```text
+bar {
+    status_command empty-status
+}
+```
+
+The first run creates
+`$XDG_CONFIG_HOME/empty-status/config.toml`, defaulting to
+`~/.config/empty-status/config.toml`, with a working clock configuration.
+
+## Configure
+
+Units are declared from rightmost to leftmost. This is a complete minimal
+configuration:
+
+```toml
+[global]
+padding = 1
+
+[[units]]
+type = "Time"
+poll_interval = 1.0
+format = "%a %b %d %Y - %H:%M"
+```
+
+[`config.example.toml`](config.example.toml) is the complete annotated schema.
+The root and every unit reject unknown keys. Expensive probes have enforced
+cadence floors: 120 seconds for Weather and 15 seconds for Quota.
+
+Available unit types:
+
+| Type | Source |
+|---|---|
+| `Bat` | Linux power-supply sysfs |
+| `Cpu` | CPU utilization |
+| `Disk` | Linux block-device statistics |
+| `Mem` | system memory utilization |
+| `Net` | interface throughput and optional `ping` latency |
+| `Quota` | Claude, Codex, and OpenRouter quota telemetry |
+| `Time` | local time through a Chrono format string |
+| `Weather` | Open-Meteo forecast and air-quality APIs |
+| `Wifi` | Linux wireless netlink |
+
+## Interact
+
+Weather uses two independent mouse axes. Left click switches between immediate
+and forecast values; right click cycles temperature, relative humidity, and
+U.S. AQI. Humidity colors run from dry yellow through comfort and swamp greens,
+then decay through bog brown into corpse purple. AQI keeps the EPA category
+boundaries but uses the bar's continuous Base16 cold-to-hot scale, saturating
+at violet for AQI 200.
+
+Quota's left click switches between remaining quantities and reset windows.
+Right click cycles configured providers, and middle click forces an immediate
+refresh. Claude and Codex report percentages; OpenRouter reports remaining U.S.
+dollars.
+
+Claude subscription telemetry enters through Claude Code's supported
+`statusLine` surface. Point it at the companion binary installed with
+`empty-status`:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "/home/main/.local/bin/empty-status-claude-statusline"
+    "command": "empty-status-claude-statusline"
   }
 }
 ```
 
-The OpenRouter source calls `GET /api/v1/credits`. Its `token_file` must contain
-an OpenRouter management key and must be an absolute path. The file is read at
-each poll; its contents never appear in configuration text or logs.
+The OpenRouter source reads a management key from the absolute `token_file`
+named in configuration. The key is reread for every probe and is never emitted
+to the status line or log.
 
-Selected unit modes survive process and i3 restarts in
-`$XDG_STATE_HOME/empty-status/posture.json`. The state file is atomically
-replaced after mode changes. Missing, malformed, incompatible, and unwritable
-state silently falls back to each unit's default mode and never blocks startup.
+## System Conduct
 
-Fast checks:
+Interaction posture survives i3 and process restarts in
+`$XDG_STATE_HOME/empty-status/posture.json`. The process writes one bounded,
+per-session log to `$XDG_STATE_HOME/empty-status/last.log`; the file is
+truncated on startup. Missing or corrupt posture never blocks startup.
 
-```bash
-python3 scripts/check.py
+Weather performs network requests to Open-Meteo. Air-quality values use the
+CAMS ENSEMBLE forecast exposed by Open-Meteo and retain the EPA's U.S. AQI
+category boundaries. Net can spawn `ping`; Quota can invoke Codex app-server,
+read Claude's local status-line cache, and call OpenRouter's authenticated
+credits endpoint. No other unit performs external networking.
+
+## Develop
+
+[`SPEC.md`](SPEC.md) states the architecture and invariants. The canonical gate
+formats, lints, tests, and builds documentation:
+
+```sh
+python3 scripts/check.py deep
 ```
 
-Install to `~/.local/bin` (via `cargo install --root`):
+Install the working tree into `~/.local/bin` after a completed change:
 
-```bash
+```sh
 python3 scripts/install.py
 ```
+
+## License
+
+[MIT](LICENSE)

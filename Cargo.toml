@@ -2,12 +2,27 @@
 resolver = "3"
 
 [workspace.package]
-authors = ["空"]
-description = "an i3 status bar"
+authors = ["eternalist <main@swarm.moe>"]
+categories = ["command-line-utilities"]
+description = "A closed, interactive i3bar status line for Linux."
 edition = "2024"
+homepage = "https://eternalist.moe/projects/empty-status/"
+include = [
+  "src/**",
+  "Cargo.lock",
+  "Cargo.toml",
+  "LICENSE",
+  "README.md",
+  "SPEC.md",
+  "config.example.toml",
+]
+keywords = ["i3", "i3bar", "status-bar", "linux"]
 license = "MIT"
+publish = ["crates-io"]
+readme = "README.md"
+repository = "https://github.com/aoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoa/empty-status"
 rust-version = "1.94"
-version = "5.2.0"
+version = "5.2.1"
 
 [workspace.lints.rust]
 elided_lifetimes_in_paths = "deny"
@@ -106,9 +121,16 @@ exclude = []
 [package]
 name = "empty-status"
 authors.workspace = true
+categories.workspace = true
 description.workspace = true
 edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
 license.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
