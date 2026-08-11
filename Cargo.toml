@@ -22,7 +22,7 @@ publish = ["crates-io"]
 readme = "README.md"
 repository = "https://github.com/aoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoaoa/empty-status"
 rust-version = "1.94"
-version = "5.2.2"
+version = "5.2.3"
 
 [workspace.lints.rust]
 elided_lifetimes_in_paths = "deny"
